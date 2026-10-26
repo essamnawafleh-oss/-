@@ -10,7 +10,8 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QComboBox, QFileDialog, QHBoxLayout, QMessageBox
 
 from .. import excel_export
-from ..data import TENDER_TYPES, format_num
+from ..data import TENDER_TYPES, format_num, safe_filename
+from ..dialogs import export_reports
 from ..theme import S2, S4
 from ..widgets import Banner, Card, Field, Page, StatTile, button, grid
 
@@ -54,7 +55,12 @@ class ExportPage(Page):
         self.open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_path)))
         self.folder_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self.last_path))))
+        self.reports_btn = button("تقارير PDF للمعاملات المعروضة", "secondary", "mdi6.file-pdf-box")
+        self.reports_btn.setToolTip("مجلد لكل معاملة باسم صاحبها: PDF + Excel + ملف الأوتوكاد + المرفقات")
+        self.reports_btn.setMinimumHeight(40)
+        self.reports_btn.clicked.connect(self.do_reports)
         row.addWidget(self.export_btn)
+        row.addWidget(self.reports_btn)
         row.addWidget(self.open_btn)
         row.addWidget(self.folder_btn)
         row.addStretch(1)
@@ -111,11 +117,15 @@ class ExportPage(Page):
         if not rows:
             self.status.show_msg("لا توجد شوارع مطابقة للتصدير.", "warning")
             return
-        name = "دراسات_الشوارع"
-        if fr:
-            name += "_" + fr
-        if ft:
-            name += "_" + ft
+        owners = {s.get("name", "").strip() for s in rows}
+        if len(owners) == 1:  # معاملة واحدة ← الملف باسم صاحبها
+            name = safe_filename(owners.pop())
+        else:
+            name = "دراسات_الشوارع"
+            if fr:
+                name += "_" + fr
+            if ft:
+                name += "_" + ft
         name += "_" + datetime.date.today().isoformat() + ".xlsx"
         path, _ = QFileDialog.getSaveFileName(self, "حفظ ملف Excel", os.path.join(_documents(), name),
                                               "Excel (*.xlsx)")
@@ -134,6 +144,13 @@ class ExportPage(Page):
         self.last_path = path
         self._set_file_buttons()
         self.status.show_msg(f"تم التصدير: {os.path.basename(path)} ({len(rows)} شارع)", "success", autohide=False)
+
+    def do_reports(self):
+        _, _, rows = self.selection()
+        if not rows:
+            self.status.show_msg("لا توجد شوارع مطابقة للتصدير.", "warning")
+            return
+        export_reports(self, self.store, rows)
 
     def backup(self):
         name = f"نسخة_دراسات_الشوارع_{datetime.date.today().isoformat()}.zip"

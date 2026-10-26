@@ -25,7 +25,7 @@ def button(text, kind=None, icon_name=None, icon_color=None):
     if kind:
         b.setObjectName(kind)
     if icon_name:
-        default = {None: "#FFFFFF", "success": "#FFFFFF", "dangerSolid": "#FFFFFF",
+        default = {None: C["on_accent"], "success": C["on_success"], "dangerSolid": C["on_danger"],
                    "danger": C["danger"]}.get(kind, C["text2"])
         b.setIcon(icon(icon_name, icon_color or default))
     b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -203,10 +203,10 @@ class ChoiceGroup(QWidget):
 
 
 _BANNER_ICONS = {
-    "info": ("mdi6.information-outline", C["info"]),
-    "success": ("mdi6.check-circle-outline", C["success"]),
-    "warning": ("mdi6.alert-outline", C["warning"]),
-    "danger": ("mdi6.alert-circle-outline", C["danger"]),
+    "info": "mdi6.information-outline",
+    "success": "mdi6.check-circle-outline",
+    "warning": "mdi6.alert-outline",
+    "danger": "mdi6.alert-circle-outline",
 }
 
 
@@ -229,8 +229,8 @@ class Banner(QFrame):
 
     def show_msg(self, text, kind="info", autohide=None):
         self.setProperty("kind", kind)
-        name, color = _BANNER_ICONS.get(kind, _BANNER_ICONS["info"])
-        self.ic.setPixmap(qta.icon(name, color=color).pixmap(18, 18))
+        kind = kind if kind in _BANNER_ICONS else "info"
+        self.ic.setPixmap(qta.icon(_BANNER_ICONS[kind], color=C[kind]).pixmap(18, 18))
         self.text.setText(text)
         repolish(self)
         repolish(self.text)

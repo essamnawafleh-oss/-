@@ -1,13 +1,14 @@
 """قائمة الشوارع المدخلة."""
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QTableWidget,
     QTableWidgetItem, QWidget,
 )
 
 from ..data import MIX_ON_MIX, TENDER_TYPES, format_num
-from ..dialogs import ConfirmDialog
-from ..theme import S2, S3, S4
+from ..dialogs import ConfirmDialog, export_reports
+from ..theme import C, S2, S3, S4
 from ..widgets import Field, Page, StatTile, button, label
 
 COLS = ["اسم المواطن", "المنطقة", "العطاء · الخلطة", "القطعة", "الأبعاد (م) · المساحة (م²)", "إضافات",
@@ -64,6 +65,7 @@ class StreetsListPage(Page):
         hh.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 170)
         hh.setMinimumSectionSize(70)
         hh.setHighlightSections(False)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -105,6 +107,8 @@ class StreetsListPage(Page):
             L, W = s.get("length") or 0, s.get("width") or 0
             mix = "على خلطة" if s.get("mixType") == MIX_ON_MIX else "على بيس كورس"
             extras = []
+            if s.get("parcel"):
+                extras.append("مخطط")
             if s.get("walls"):
                 extras.append(f"{len(s['walls'])} جدار")
             if s.get("attachments"):
@@ -118,13 +122,18 @@ class StreetsListPage(Page):
                 QTableWidgetItem(" · ".join(extras) or "—"),
                 num_item(format_num(cost)),
             ]
-            vals[-1].setForeground(Qt.GlobalColor.darkGreen)
+            vals[-1].setForeground(QColor(C["success"]))
             cf = vals[-1].font()
             cf.setBold(True)
             vals[-1].setFont(cf)
             for c, it in enumerate(vals):
                 self.table.setItem(r, c, it)
-            self.table.setCellWidget(r, len(COLS) - 1, self._actions(real))
+            actions = self._actions(real)
+            self.table.setCellWidget(r, len(COLS) - 1, actions)
+            # عمود الأزرار لا يُقاس تلقائياً لأن محتواه عناصر وليست نصوصاً
+            last = len(COLS) - 1
+            self.table.horizontalHeader().setSectionResizeMode(last, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(last, actions.sizeHint().width() + S2)
         self.count_tile.set_value(len(rows))
         self.total_tile.set_value(format_num(total))
         self.table.setVisible(bool(rows))
@@ -135,12 +144,18 @@ class StreetsListPage(Page):
         h = QHBoxLayout(w)
         h.setContentsMargins(S2, 0, S2, 0)
         h.setSpacing(S2)
-        e = button("تعديل", "secondary", "mdi6.pencil-outline")
-        d = button("حذف", "danger", "mdi6.trash-can-outline")
-        for b in (e, d):
-            b.setStyleSheet("padding: 4px 10px;")
+        r = button("تقرير", "secondary", "mdi6.file-pdf-box")
+        e = button("", "secondary", "mdi6.pencil-outline")
+        d = button("", "danger", "mdi6.trash-can-outline")
+        e.setToolTip("تعديل")
+        d.setToolTip("حذف")
+        r.setToolTip("تصدير مجلد باسم صاحب المعاملة: تقرير PDF + Excel + ملف الأوتوكاد + المرفقات")
+        for b in (r, e, d):
+            b.setProperty("compact", True)
+        r.clicked.connect(lambda: export_reports(self, self.store, [self.store.streets[idx]]))
         e.clicked.connect(lambda: self.edit_requested.emit(idx))
         d.clicked.connect(lambda: self.ask_delete(idx))
+        h.addWidget(r)
         h.addWidget(e)
         h.addWidget(d)
         return w

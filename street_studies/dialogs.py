@@ -1,8 +1,10 @@
 """نوافذ منبثقة: عرض المخططات والصور، وتأكيد الحذف."""
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+import os
+
+from PySide6.QtCore import QStandardPaths, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout,
+    QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QScrollArea, QVBoxLayout,
 )
 
 from .theme import S2, S3, S4, S6
@@ -12,10 +14,10 @@ from .widgets import button, label
 class ImageDialog(QDialog):
     """يعرض صورة بعرض النافذة، مع تكبير/تصغير."""
 
-    def __init__(self, title, image_path, parent=None):
+    def __init__(self, title, image, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.pix = QPixmap(image_path)
+        self.pix = image if isinstance(image, QPixmap) else QPixmap(image)
         self.zoom = 1.0
         lay = QVBoxLayout(self)
         lay.setContentsMargins(S4, S4, S4, S4)
@@ -42,7 +44,7 @@ class ImageDialog(QDialog):
         self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img = QLabel()
         self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.img.setStyleSheet("background:#FFFFFF; border:1px solid #E0E6E9; border-radius:8px;")
+        self.img.setObjectName("imageView")
         self.scroll.setWidget(self.img)
         lay.addWidget(self.scroll, 1)
 
@@ -95,3 +97,49 @@ class ConfirmDialog(QDialog):
         row.addWidget(ok)
         lay.addLayout(row)
         cancel.setFocus()
+
+
+def export_reports(parent, store, streets):
+    """يصدّر لكل معاملة مجلداً باسم صاحبها (PDF + Excel + ملف الأوتوكاد + المرفقات)."""
+    from . import report
+
+    if not streets:
+        return None
+    win = parent.window()
+    settings = getattr(win, "settings", None) or {}
+    docs = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+    start = settings.get("last_export_dir") or os.path.join(docs or os.path.expanduser("~"), "دراسات الشوارع")
+    os.makedirs(start, exist_ok=True)
+    title = (f"اختر مكان حفظ تقرير «{streets[0].get('name', '')}»" if len(streets) == 1
+             else f"اختر مكان حفظ تقارير {len(streets)} معاملة")
+    out = QFileDialog.getExistingDirectory(win, title, start)
+    if not out:
+        return None
+    if hasattr(settings, "save"):
+        settings["last_export_dir"] = out
+        settings.save()
+    folders, errors = [], []
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        for s in streets:
+            try:
+                folders.append(report.export_report(store, s, out))
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{s.get('name', '')}: {e}")
+            QApplication.processEvents()
+    finally:
+        QApplication.restoreOverrideCursor()
+
+    target = folders[0] if len(folders) == 1 else out
+    msg = (f"تم إنشاء مجلد «{os.path.basename(folders[0])}» ويحتوي التقرير وملف Excel وملف الأوتوكاد والمرفقات."
+           if len(folders) == 1 else f"تم تصدير {len(folders)} تقرير، كلٌّ في مجلد باسم صاحب المعاملة.")
+    if errors:
+        msg += "\n\nتعذّر تصدير:\n" + "\n".join(errors)
+    box = QMessageBox(QMessageBox.Icon.Information if not errors else QMessageBox.Icon.Warning,
+                      "تصدير التقارير", msg, parent=win)
+    open_btn = box.addButton("فتح المجلد", QMessageBox.ButtonRole.AcceptRole) if folders else None
+    box.addButton("إغلاق", QMessageBox.ButtonRole.RejectRole)
+    box.exec()
+    if open_btn is not None and box.clickedButton() is open_btn:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+    return folders

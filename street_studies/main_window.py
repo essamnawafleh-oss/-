@@ -1,13 +1,16 @@
 """النافذة الرئيسية: شريط جانبي للتنقل + صفحات."""
 import qtawesome as qta
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
+from . import theme
 from .data import Store, resource_path
+from .pages.appearance import AppearancePage
 from .pages.entry import EntryPage
 from .pages.export import ExportPage
 from .pages.prices import PricesPage
@@ -22,6 +25,7 @@ NAV = [
     ("prices", "الأسعار والبنود", "mdi6.tag-outline"),
     ("summary", "الملخص", "mdi6.chart-box-outline"),
     ("export", "تصدير Excel", "mdi6.microsoft-excel"),
+    ("appearance", "المظهر", "mdi6.palette-outline"),
 ]
 
 
@@ -32,7 +36,7 @@ class NavButton(QPushButton):
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setIcon(qta.icon(icon_name, color=C["sidebar_text"], color_active=C["sidebar_text"],
-                              color_on=C["accent"], color_on_active=C["accent"]))
+                              color_on=C["sidebar_active_text"], color_on_active=C["sidebar_active_text"]))
         self.setIconSize(self.iconSize() * 1.25)
         self.badge = None
 
@@ -48,14 +52,20 @@ class NavButton(QPushButton):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, store=None):
+    def __init__(self, store=None, settings=None):
         super().__init__()
+        from .settings import Settings
+
         self.store = store or Store()
+        self.settings = settings if settings is not None else Settings(self.store.root)
         self.setWindowTitle("تطبيق دراسات الشوارع الذكي")
         self.setWindowIcon(QIcon(resource_path("app.ico")))
         self.resize(1280, 820)
         self.setMinimumSize(1040, 640)
+        self.build_ui()
+        self.go("entry")
 
+    def build_ui(self):
         root = QWidget()
         h = QHBoxLayout(root)
         h.setContentsMargins(0, 0, 0, 0)
@@ -72,6 +82,7 @@ class MainWindow(QMainWindow):
             "prices": PricesPage(self.store),
             "summary": SummaryPage(self.store),
             "export": ExportPage(self.store),
+            "appearance": AppearancePage(self.settings),
         }
         for key, _, _ in NAV:
             self.stack.addWidget(self.pages[key])
@@ -81,9 +92,18 @@ class MainWindow(QMainWindow):
         self.pages["list"].changed.connect(self.update_badge)
         self.pages["prices"].changed.connect(self.pages["entry"].update_live_cost)
         self.pages["export"].data_restored.connect(self.on_restored)
-
-        self.go("entry")
+        self.pages["appearance"].changed.connect(lambda: QTimer.singleShot(0, self.apply_appearance))
         self.update_badge()
+
+    def apply_appearance(self):
+        """يطبّق الثيم ويعيد بناء الواجهة مع الحفاظ على ما أُدخل في النموذج."""
+        snap = self.pages["entry"].snapshot()
+        scroll = self.pages["appearance"].scroll.verticalScrollBar().value()
+        theme.apply(QApplication.instance(), self.settings)
+        self.build_ui()
+        self.pages["entry"].restore(snap)
+        self.go("appearance")
+        self.pages["appearance"].scroll.verticalScrollBar().setValue(scroll)
 
     def _sidebar(self):
         side = QFrame()
@@ -96,10 +116,10 @@ class MainWindow(QMainWindow):
         brand = QHBoxLayout()
         brand.setSpacing(10)
         logo = QLabel()
+        logo.setObjectName("logo")
         logo.setPixmap(qta.icon("mdi6.road-variant", color="#FFFFFF").pixmap(28, 28))
         logo.setFixedSize(44, 44)
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setStyleSheet(f"background:{C['accent2']}; border-radius:10px;")
         brand.addWidget(logo)
         t = QVBoxLayout()
         t.setSpacing(0)
@@ -122,8 +142,8 @@ class MainWindow(QMainWindow):
 
         v.addStretch(1)
         sep = QFrame()
+        sep.setObjectName("sidebarSep")
         sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background:{C['sidebar_hover']};")
         v.addWidget(sep)
         v.addSpacing(S2)
         v.addWidget(label("مناطق · طبيعة عطاء · نوع خلطة · جدران متعددة · تصدير Excel", "credit", wrap=True))

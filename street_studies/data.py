@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import re
 import shutil
 import sys
 import uuid
@@ -73,8 +74,8 @@ DEFAULT_ITEMS = [
     {"code": "DRN-007", "group": _DRAIN, "name": "Grating", "unit": "عدد", "price": 0},
 ]
 
-MAX_ATTACH_BYTES = 3 * 1024 * 1024
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+CAD_EXTS = {".dxf", ".dwg"}
 
 
 # ========== المسارات ==========
@@ -160,6 +161,13 @@ def format_num(n):
     return f"{float(n or 0):,.2f}"
 
 
+def safe_filename(name, fallback="بدون اسم"):
+    """اسم صالح لملفات ويندوز (يحذف الرموز الممنوعة)."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(name or "")).strip().rstrip(". ")
+    name = re.sub(r"\s+", " ", name)
+    return name[:120] or fallback
+
+
 def format_file_size(size):
     if size is None:
         return ""
@@ -230,11 +238,9 @@ class Store:
         return [s for s in self.streets
                 if (not region or s.get("region") == region) and (not tender or s.get("tenderType") == tender)]
 
-    # ---- المرفقات (تُنسخ إلى مجلد البيانات بدل تخزينها داخل JSON)
+    # ---- المرفقات (تُنسخ إلى مجلد البيانات بدل تخزينها داخل JSON، بدون حد للحجم)
     def add_attachment(self, src_path):
         size = os.path.getsize(src_path)
-        if size > MAX_ATTACH_BYTES:
-            raise ValueError("too_large")
         name = os.path.basename(src_path)
         stored = f"{uuid.uuid4().hex[:12]}_{name}"
         shutil.copy2(src_path, os.path.join(self.attach_dir, stored))
@@ -246,6 +252,7 @@ class Store:
 
     def purge_orphan_attachments(self):
         used = {a.get("file") for s in self.streets for a in s.get("attachments") or []}
+        used |= {s["parcel"].get("file") for s in self.streets if s.get("parcel")}
         for fn in os.listdir(self.attach_dir):
             if fn not in used:
                 try:

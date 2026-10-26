@@ -7,9 +7,10 @@ from PySide6.QtWidgets import QApplication
 from . import theme
 from .data import Store
 from .main_window import MainWindow
+from .settings import Settings
 
 
-def create_app(argv=None):
+def create_app(argv=None, settings=None):
     if sys.platform == "win32":
         try:  # أيقونة التطبيق في شريط المهام بدل أيقونة بايثون
             import ctypes
@@ -23,19 +24,18 @@ def create_app(argv=None):
     QLocale.setDefault(QLocale(QLocale.Language.Arabic, QLocale.Country.Jordan))
     app.setStyle("Fusion")
     theme.load_fonts()
-    app.setFont(theme.font())
-    app.setPalette(theme.palette())
-    app.setStyleSheet(theme.stylesheet())
+    theme.apply(app, settings if settings is not None else Settings())
     return app
 
 
 def main():
-    app = create_app()
     if "--smoke-test" in sys.argv:
-        sys.exit(_smoke_test(app))
+        sys.exit(_smoke_test(create_app()))
+    settings = Settings()
+    app = create_app(settings=settings)
     store = Store()
     store.purge_orphan_attachments()
-    win = MainWindow(store)
+    win = MainWindow(store, settings)
     win.show()
     sys.exit(app.exec())
 
@@ -49,15 +49,37 @@ def _smoke_test(app):
 
     from .data import resource_path
 
-    for name in ("app.ico", "diagram_rubble.png", "diagram_reinforced.png", "chevron-down.svg",
+    for name in ("app.ico", "diagram_rubble.png", "diagram_reinforced.png",
                  os.path.join("fonts", "IBMPlexSansArabic_400Regular.ttf")):
         if not os.path.exists(resource_path(name)):
             print("missing asset:", name)
             return 2
-    win = MainWindow(Store(tempfile.mkdtemp()))
+    tmp = tempfile.mkdtemp()
+    win = MainWindow(Store(tmp), Settings(tmp))
     win.show()
-    for key in win.pages:
+    for key in list(win.pages):
         win.go(key)
+    win.settings["theme"] = "graphite"
+    win.apply_appearance()
+    # قراءة ورسم ملف DXF وتصدير تقرير PDF (يتأكد أن ezdxf مضمّنة)
+    import ezdxf
+
+    from . import dxf_render, report
+    dxf = os.path.join(tmp, "t.dxf")
+    doc = ezdxf.new()
+    doc.modelspace().add_lwpolyline([(0, 0), (10, 0), (10, 8), (0, 8)], close=True)
+    doc.saveas(dxf)
+    img, err = dxf_render.render_file(dxf, 200, 150)
+    if img is None:
+        print("dxf failed:", err)
+        return 3
+    st = win.store
+    st.streets.append({"name": "اختبار", "length": 10, "width": 5, "quantities": {},
+                       "parcel": st.add_attachment(dxf), "attachments": []})
+    folder = report.export_report(st, st.streets[-1], tmp)
+    if not os.path.exists(os.path.join(folder, "اختبار.pdf")):
+        print("report failed")
+        return 4
     QTimer.singleShot(800, app.quit)
     app.exec()
     print("smoke test ok")

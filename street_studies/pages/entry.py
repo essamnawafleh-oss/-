@@ -9,9 +9,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from .. import data
+from .. import data, dxf_render
 from ..data import (
-    MIX_ON_BASE, MIX_ON_MIX, REINFORCED_TABLE, WALL_REINFORCED_CODE, WALL_RUBBLE_CODE,
+    CAD_EXTS, MIX_ON_BASE, MIX_ON_MIX, REINFORCED_TABLE, WALL_REINFORCED_CODE, WALL_RUBBLE_CODE,
     calc_reinforced, calc_rubble, format_file_size, format_num, resource_path,
 )
 from ..dialogs import ImageDialog
@@ -40,10 +40,9 @@ class WallWidget(QFrame):
         reinforced = wall["type"] == "reinforced"
         ic = QLabel()
         ic.setPixmap(icon("mdi6.wall" if reinforced else "mdi6.wall-sconce-flat-outline",
-                          C["accent"]).pixmap(18, 18))
+                          C["accent_fg"]).pixmap(18, 18))
         head.addWidget(ic)
-        self.title = label("", "fieldLabel")
-        self.title.setStyleSheet(f"color:{C['accent_pressed']}; font-size:10pt;")
+        self.title = label("", "subTitle")
         head.addWidget(self.title, 1)
         rm = button("حذف", "danger", "mdi6.trash-can-outline")
         rm.clicked.connect(lambda: self.removed.emit(self.wall))
@@ -71,9 +70,7 @@ class WallWidget(QFrame):
             lay.addLayout(grid([Field("الطول L (م)", self.L), Field("ارتفاع الجدار H (م)", self.H),
                                 Field("ارتفاع القاعدة hb (م)", self.hb)], 3))
 
-        self.result = label("", wrap=True)
-        self.result.setStyleSheet(
-            f"background:{C['success_soft']}; color:{C['success']}; border-radius:6px; padding:6px 10px;")
+        self.result = label("", "wallResult", wrap=True)
         lay.addWidget(self.result)
         self._update_result()
 
@@ -125,7 +122,7 @@ class AttachmentCard(QFrame):
             thumb.setPixmap(pm.scaled(QSize(134, 96), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                       Qt.TransformationMode.SmoothTransformation).copy(0, 0, 134, 96))
         else:
-            thumb.setPixmap(icon("mdi6.file-document-outline", C["accent"]).pixmap(36, 36))
+            thumb.setPixmap(icon("mdi6.file-document-outline", C["accent_fg"]).pixmap(36, 36))
         lay.addWidget(thumb)
         name = label(att["name"], "caption")
         name.setToolTip(att["name"])
@@ -160,6 +157,7 @@ class EntryPage(QWidget):
         self.walls = []
         self.wall_seq = 0
         self.attachments = []
+        self.parcel = None
         self.manual = set()
         self.qty = {}
         self._building = False
@@ -188,6 +186,7 @@ class EntryPage(QWidget):
 
         col.addWidget(self._region_card())
         col.addWidget(self._street_card())
+        col.addWidget(self._parcel_card())
         col.addWidget(self._mix_card())
         for group in self._groups():
             col.addWidget(self._qty_card(group))
@@ -237,7 +236,7 @@ class EntryPage(QWidget):
         self.area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.notes = QPlainTextEdit()
         self.notes.setPlaceholderText("أي ملاحظات…")
-        self.notes.setFixedHeight(64)
+        self.notes.setFixedHeight(self.notes.fontMetrics().lineSpacing() * 3 + 22)
         card.body.addLayout(grid([Field("اسم المواطن *", self.name), Field("رقم القطعة", self.piece),
                                   QWidget()], 3))
         card.body.addLayout(grid([Field("الطول (م) *", self.length), Field("العرض (م) *", self.width),
@@ -293,8 +292,8 @@ class EntryPage(QWidget):
         row.setSpacing(S2)
         a1 = button("جدار مسلح", "secondary", "mdi6.plus")
         a2 = button("جدار دبش وباطون", "secondary", "mdi6.plus")
-        d1 = button("مخطط الجدار المسلح", "ghost", "mdi6.ruler-square", C["accent"])
-        d2 = button("مخطط جدار الدبش", "ghost", "mdi6.ruler-square", C["accent"])
+        d1 = button("مخطط الجدار المسلح", "ghost", "mdi6.ruler-square", C["accent_fg"])
+        d2 = button("مخطط جدار الدبش", "ghost", "mdi6.ruler-square", C["accent_fg"])
         a1.clicked.connect(lambda: self.add_wall("reinforced"))
         a2.clicked.connect(lambda: self.add_wall("rubble"))
         d1.clicked.connect(lambda: ImageDialog("مخطط الجدار المسلح",
@@ -309,8 +308,73 @@ class EntryPage(QWidget):
         card.body.addLayout(row)
         return card
 
+    def _parcel_card(self):
+        card = Card("ملف قطعة الأرض (أوتوكاد)",
+                    "أرفق ملف DXF للقطعة — يظهر المخطط هنا وفي تقرير PDF، ويُصدَّر الملف مع التقرير باسم صاحب المعاملة.",
+                    icon_name="mdi6.vector-square")
+        # الحالة الفارغة
+        self.parcel_empty = QFrame()
+        self.parcel_empty.setObjectName("dropZone")
+        ev = QVBoxLayout(self.parcel_empty)
+        ev.setContentsMargins(S4, S6, S4, S6)
+        ev.setSpacing(S2)
+        ic = QLabel()
+        ic.setPixmap(icon("mdi6.file-cad", C["accent_fg"]).pixmap(36, 36))
+        ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ev.addWidget(ic)
+        t = label("اسحب ملف DXF إلى هنا أو اختره من جهازك", "caption")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ev.addWidget(t)
+        pick = button("إرفاق ملف DXF", None, "mdi6.paperclip")
+        pick.clicked.connect(self.pick_parcel)
+        r = QHBoxLayout()
+        r.addStretch(1)
+        r.addWidget(pick)
+        r.addStretch(1)
+        ev.addLayout(r)
+        card.body.addWidget(self.parcel_empty)
+
+        # الحالة مع ملف
+        self.parcel_box = QWidget()
+        h = QHBoxLayout(self.parcel_box)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(S4)
+        self.parcel_preview = QLabel()
+        self.parcel_preview.setObjectName("cadPreview")
+        self.parcel_preview.setFixedSize(380, 240)
+        self.parcel_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.parcel_preview.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.parcel_preview.setToolTip("انقر لعرض المخطط بحجم كبير")
+        self.parcel_preview.mouseReleaseEvent = lambda e: self.view_parcel()
+        h.addWidget(self.parcel_preview)
+        info = QVBoxLayout()
+        info.setSpacing(S2)
+        self.parcel_name = label("", "subTitle", wrap=True)
+        self.parcel_meta = label("", "caption", wrap=True)
+        info.addWidget(self.parcel_name)
+        info.addWidget(self.parcel_meta)
+        info.addStretch(1)
+        btns = QGridLayout()
+        btns.setSpacing(S2)
+        b_view = button("عرض المخطط", "secondary", "mdi6.magnify-plus-outline")
+        b_open = button("فتح في أوتوكاد", "secondary", "mdi6.open-in-new")
+        b_swap = button("استبدال الملف", "secondary", "mdi6.swap-horizontal")
+        b_rm = button("إزالة", "danger", "mdi6.trash-can-outline")
+        b_view.clicked.connect(self.view_parcel)
+        b_open.clicked.connect(lambda: QDesktopServices.openUrl(
+            QUrl.fromLocalFile(self.store.attachment_path(self.parcel))))
+        b_swap.clicked.connect(self.pick_parcel)
+        b_rm.clicked.connect(lambda: self.set_parcel(None))
+        for i, b in enumerate((b_view, b_open, b_swap, b_rm)):
+            btns.addWidget(b, i // 2, i % 2)
+        info.addLayout(btns)
+        h.addLayout(info, 1)
+        card.body.addWidget(self.parcel_box)
+        self.setAcceptDrops(True)
+        return card
+
     def _attach_card(self):
-        card = Card("الصور والمرفقات", "مخططات، بروفايلات، PDF … الحد الأقصى لكل ملف 3 ميجابايت.",
+        card = Card("الصور والمرفقات", "مخططات، بروفايلات، PDF … بدون حد لحجم الملفات. يمكنك أيضاً سحب الملفات وإفلاتها هنا.",
                     icon_name="mdi6.paperclip")
         row = QHBoxLayout()
         row.setSpacing(S2)
@@ -449,17 +513,86 @@ class EntryPage(QWidget):
         flt = ("الصور (*.png *.jpg *.jpeg *.webp *.bmp *.gif)" if images else
                "ملفات (*.pdf *.doc *.docx *.xls *.xlsx *.dwg *.dxf *.zip *.png *.jpg *.jpeg *.webp);;كل الملفات (*)")
         paths, _ = QFileDialog.getOpenFileNames(self, "اختر ملفات", os.path.expanduser("~"), flt)
-        skipped = []
+        self.add_files(paths)
+
+    def add_files(self, paths):
         for p in paths:
             try:
                 self.attachments.append(self.store.add_attachment(p))
-            except ValueError:
-                skipped.append(os.path.basename(p))
             except OSError as e:
                 self.banner.show_msg(f"تعذر قراءة الملف: {os.path.basename(p)} ({e})", "warning")
-        if skipped:
-            self.banner.show_msg("أكبر من 3 ميجابايت وتم تخطيها: " + "، ".join(skipped), "warning")
         self.render_attachments()
+
+    # ملف القطعة
+    def pick_parcel(self):
+        path, _ = QFileDialog.getOpenFileName(self, "اختر ملف قطعة الأرض", os.path.expanduser("~"),
+                                              "ملفات أوتوكاد (*.dxf *.dwg);;DXF (*.dxf)")
+        if path:
+            self.attach_parcel(path)
+
+    def attach_parcel(self, path):
+        try:
+            self.set_parcel(self.store.add_attachment(path))
+        except OSError as e:
+            self.banner.show_msg(f"تعذر قراءة الملف: {e}", "warning")
+            return
+        if path.lower().endswith(".dwg"):
+            self.banner.show_msg("تم إرفاق ملف DWG — سيُصدَّر مع التقرير، لكن المعاينة متاحة لملفات DXF فقط. "
+                                 "(من أوتوكاد: Save As ← DXF)", "info", autohide=True)
+
+    def set_parcel(self, parcel):
+        self.parcel = parcel
+        self.render_parcel()
+
+    def render_parcel(self):
+        has = bool(self.parcel)
+        self.parcel_empty.setVisible(not has)
+        self.parcel_box.setVisible(has)
+        if not has:
+            return
+        p = self.parcel
+        path = self.store.attachment_path(p)
+        self.parcel_name.setText(p["name"])
+        meta = [format_file_size(p.get("size"))]
+        if p["name"].lower().endswith(".dxf"):
+            try:
+                d = dxf_render.load(path)
+                img = dxf_render.render(d, 760, 480, line_width=1.4)
+                pm = QPixmap.fromImage(img).scaled(QSize(378, 238), Qt.AspectRatioMode.KeepAspectRatio,
+                                                   Qt.TransformationMode.SmoothTransformation)
+                self.parcel_preview.setPixmap(pm)
+                meta.append(f"أبعاد الرسم: {dxf_render.size_text(d)}")
+                area = dxf_render.area_of_largest_closed(d)
+                if area:
+                    meta.append(f"مساحة أكبر شكل مغلق: {format_num(area)}")
+                meta.append(f"{d.entities:,} عنصر")
+            except ValueError as e:
+                self.parcel_preview.setPixmap(icon("mdi6.file-alert-outline", C["warning"]).pixmap(48, 48))
+                meta.append(str(e))
+        else:
+            self.parcel_preview.setPixmap(icon("mdi6.file-cad", C["accent_fg"]).pixmap(56, 56))
+            meta.append("المعاينة متاحة لملفات DXF فقط")
+        self.parcel_meta.setText("<br>".join(meta))
+
+    def view_parcel(self):
+        if not self.parcel or not self.parcel["name"].lower().endswith(".dxf"):
+            return
+        img, err = dxf_render.render_file(self.store.attachment_path(self.parcel), 2400, 1600, line_width=1.6)
+        if img is not None:
+            ImageDialog(f"مخطط القطعة — {self.parcel['name']}", QPixmap.fromImage(img), self.window()).exec()
+
+    # السحب والإفلات: ملفات أوتوكاد ← ملف القطعة، والباقي ← المرفقات
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())]
+        cad = [p for p in paths if os.path.splitext(p)[1].lower() in CAD_EXTS]
+        if cad:
+            self.attach_parcel(cad[0])
+        self.add_files([p for p in paths if p not in cad[:1]])
+        e.acceptProposedAction()
 
     def remove_attachment(self, att):
         self.attachments = [a for a in self.attachments if a is not att]
@@ -500,8 +633,37 @@ class EntryPage(QWidget):
         self.render_walls()
         self.attachments = []
         self.render_attachments()
+        self.set_parcel(None)
         self.fill_regions()
         self.update_auto()
+
+    def collect(self):
+        return {
+            "name": self.name.text().strip(),
+            "pieceNo": self.piece.text().strip(),
+            "region": self.region.currentText(),
+            "tenderType": self.tender.value(),
+            "mixType": self.mix.value(),
+            "length": self.length.value(),
+            "width": self.width.value(),
+            "notes": self.notes.toPlainText().strip(),
+            "quantities": self.quantities(),
+            "walls": copy.deepcopy(self.walls),
+            "attachments": copy.deepcopy(self.attachments),
+            "parcel": copy.deepcopy(self.parcel),
+        }
+
+    def snapshot(self):
+        """حالة النموذج الحالية (تُستخدم لإعادة بناء الواجهة عند تغيير المظهر دون فقدان الإدخال)."""
+        return self.collect(), self.edit_index, self.scroll.verticalScrollBar().value()
+
+    def restore(self, snap):
+        street, idx, scroll = snap
+        self.load_street(street, idx)
+        if idx < 0:
+            self.title.setText("إدخال بيانات شارع")
+            self.save_btn.setText("حفظ والانتقال للتالي")
+        self.scroll.verticalScrollBar().setValue(scroll)
 
     def save(self):
         name = self.name.text().strip()
@@ -522,19 +684,7 @@ class EntryPage(QWidget):
             self.scroll.verticalScrollBar().setValue(0)
             return
 
-        street = {
-            "name": name,
-            "pieceNo": self.piece.text().strip(),
-            "region": self.region.currentText(),
-            "tenderType": self.tender.value(),
-            "mixType": self.mix.value(),
-            "length": self.length.value(),
-            "width": self.width.value(),
-            "notes": self.notes.toPlainText().strip(),
-            "quantities": self.quantities(),
-            "walls": copy.deepcopy(self.walls),
-            "attachments": copy.deepcopy(self.attachments),
-        }
+        street = self.collect()
         updating = self.edit_index >= 0
         if updating:
             self.store.streets[self.edit_index] = street
@@ -551,7 +701,9 @@ class EntryPage(QWidget):
         self.name.setFocus()
 
     def edit_street(self, idx):
-        s = self.store.streets[idx]
+        self.load_street(self.store.streets[idx], idx)
+
+    def load_street(self, s, idx):
         self.clear_form()
         self.edit_index = idx
         self.title.setText(f"تعديل سجل: {s.get('name', '')}")
@@ -577,10 +729,11 @@ class EntryPage(QWidget):
         self.render_walls()
         self.attachments = copy.deepcopy(s.get("attachments") or [])
         self.render_attachments()
+        self.set_parcel(copy.deepcopy(s.get("parcel")))
         self.length.blockSignals(True)
         self.width.blockSignals(True)
-        self.length.set_value(s.get("length"))
-        self.width.set_value(s.get("width"))
+        self.length.set_value(s.get("length") or None)
+        self.width.set_value(s.get("width") or None)
         self.length.blockSignals(False)
         self.width.blockSignals(False)
         self.update_auto()

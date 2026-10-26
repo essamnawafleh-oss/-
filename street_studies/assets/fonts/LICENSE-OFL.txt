@@ -91,3 +91,8 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+
+----
+The other bundled fonts (Cairo, Tajawal, Almarai, Noto Kufi Arabic, Noto Naskh Arabic) are distributed
+by Google Fonts under the same SIL Open Font License 1.1; copyright belongs to their respective authors.
