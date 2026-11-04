@@ -107,15 +107,20 @@ class StreetsListPage(Page):
             L, W = s.get("length") or 0, s.get("width") or 0
             mix = "على خلطة" if s.get("mixType") == MIX_ON_MIX else "على بيس كورس"
             extras = []
+            if s.get("sitePlan"):
+                extras.append("مخطط موقع")
+            if s.get("path"):
+                extras.append("مسار")
             if s.get("parcel"):
-                extras.append("مخطط")
+                extras.append("DXF")
             if s.get("walls"):
                 extras.append(f"{len(s['walls'])} جدار")
             if s.get("attachments"):
                 extras.append(f"{len(s['attachments'])} مرفق")
             vals = [
                 name,
-                QTableWidgetItem(s.get("region") or "—"),
+                QTableWidgetItem((s.get("region") or "—") + (f" · حوض {(s.get('plan') or {}).get('basin')}"
+                                                             if (s.get("plan") or {}).get("basin") else "")),
                 QTableWidgetItem(f"{s.get('tenderType') or '—'} · {mix}"),
                 QTableWidgetItem(s.get("pieceNo") or "—"),
                 num_item(f"{L:g} × {W:g} = {format_num(L * W)}"),

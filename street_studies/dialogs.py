@@ -143,3 +143,57 @@ def export_reports(parent, store, streets):
     if open_btn is not None and box.clickedButton() is open_btn:
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
     return folders
+
+
+class DuplicateDialog(QDialog):
+    """سجل مشابه محفوظ مسبقاً: تحديثه (الدمج معه) أو حفظ سجل جديد. choice = فهرس السجل أو None."""
+
+    def __init__(self, store, dups, saving=False, parent=None):
+        from .data import format_num
+
+        super().__init__(parent)
+        self.setWindowTitle("سجل محفوظ مسبقاً")
+        self.setMinimumWidth(520)
+        self.choice = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(S6, S6, S6, S4 + 4)
+        lay.setSpacing(S3)
+        lay.addWidget(label("يوجد سجل محفوظ مسبقاً لنفس المواطن أو القطعة", "sectionTitle"))
+        lay.addWidget(label("اختر «تحديث» لإضافة المعلومات الجديدة إلى السجل الموجود مع الإبقاء على ما حُفظ فيه "
+                            "من قبل، أو «سجل جديد» إن كانت معاملة مختلفة.", "caption", wrap=True))
+        for idx, reason in dups[:4]:
+            s = store.streets[idx]
+            plan = s.get("plan") or {}
+            info = " · ".join(x for x in [
+                f"قطعة {s.get('pieceNo')}" if s.get("pieceNo") else "",
+                f"حوض {plan.get('basin')}" if plan.get("basin") else "",
+                s.get("region") or "", f"الكلفة {format_num(store.street_cost(s))}"] if x)
+            from PySide6.QtWidgets import QFrame
+            card = QFrame()
+            card.setObjectName("subCard")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(S3, S2, S3, S2)
+            texts = QVBoxLayout()
+            texts.setSpacing(2)
+            texts.addWidget(label(f"{s.get('name', '')}  ({reason})", "subTitle", wrap=True))
+            texts.addWidget(label(info, "caption", wrap=True))
+            row.addLayout(texts, 1)
+            upd = button("تحديث هذا السجل", None, "mdi6.update")
+            upd.clicked.connect(lambda _=False, i=idx: self._pick(i))
+            row.addWidget(upd)
+            lay.addWidget(card)
+        lay.addSpacing(S2)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        cancel = button("إلغاء", "secondary")
+        new = button("حفظ كسجل جديد" if saving else "سجل جديد", "secondary", "mdi6.plus")
+        cancel.clicked.connect(self.reject)
+        new.clicked.connect(self.accept)
+        btns.addWidget(cancel)
+        btns.addWidget(new)
+        lay.addLayout(btns)
+        self.adjustSize()
+
+    def _pick(self, idx):
+        self.choice = idx
+        self.accept()

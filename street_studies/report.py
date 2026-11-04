@@ -7,7 +7,7 @@ import shutil
 from PySide6.QtCore import QMarginsF, QSizeF, Qt, QUrl
 from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPdfWriter, QTextDocument, QTextOption
 
-from . import dxf_render, excel_export, theme
+from . import dxf_render, excel_export, site_plan, theme
 from .data import (
     MIX_ON_MIX, calc_reinforced, calc_rubble, format_file_size, format_num, safe_filename,
 )
@@ -49,7 +49,7 @@ def _row(label, value):
     return _tr(f'<td class="k">{_esc(label)}</td>', f"<td>{value}</td>")
 
 
-def build_html(store, street, parcel_img=False, parcel_info=None, images=()):
+def build_html(store, street, parcel_img=False, parcel_info=None, images=(), plan_img=False, path_img=False):
     s = street
     L, W = s.get("length") or 0, s.get("width") or 0
     total = store.street_cost(s)
@@ -96,6 +96,53 @@ def build_html(store, street, parcel_img=False, parcel_info=None, images=()):
 
     walls_html = f'<h2>الجدران</h2><table width="100%">{walls}</table>' if walls else ""
 
+    # بيانات مخطط الموقع والترسيم
+    plan_html = ""
+    plan = s.get("plan") or {}
+    if plan:
+        rows_p = ""
+        for key, title in (("plate", "رقم اللوحة"), ("basin", "الحوض"), ("hay", "الحي"), ("village", "القرية"),
+                           ("parcelArea", "مساحة القطعة (م²)"), ("landUse", "استعمال القطعة"),
+                           ("planDate", "تاريخ المخطط")):
+            v = plan.get(key)
+            if not v:
+                continue
+            if key in ("basin", "hay") and plan.get(key + "No"):
+                v = f"{v} ({plan[key + 'No']})"
+            rows_p += _row(title, _esc(v))
+        plan_html = f'<h2>بيانات مخطط الموقع والترسيم</h2><table width="100%">{rows_p}</table>'
+        z = plan.get("zoning") or {}
+        if z:
+            heads = [t for k, t in site_plan.ZONING_FIELDS if z.get(k)]
+            vals = [_esc(z[k]) for k, _ in site_plan.ZONING_FIELDS if z.get(k)]
+            plan_html += ('<p class="muted">أحكام التنظيم</p><table width="100%">'
+                          + _tr(*[f"<th>{h}</th>" for h in heads]) + _tr(*[f'<td class="c">{v}</td>' for v in vals])
+                          + "</table>")
+    plan_page = ('<h2>مخطط الموقع والترسيم المرفق</h2><p class="c"><img src="img://plan" width="560"></p>'
+                 if plan_img else "")
+
+    # المسار على المخطط التنظيمي
+    path_html = ""
+    pth = s.get("path") or {}
+    if pth:
+        rows_m = ""
+        if pth.get("roads"):
+            rows_m += _row("طول الشارع المحتسب", f"{pth.get('bill', 0):.2f} م × عرض {pth.get('w', 0):g} م "
+                                                   f"({len(pth['roads'])} خط)")
+        if pth.get("wallRLen"):
+            rows_m += _row("جدران دبش وباطون", f"{pth['wallRLen']:.1f} م.ط")
+        if pth.get("wallCLen"):
+            rows_m += _row("جدران مسلحة", f"{pth['wallCLen']:.1f} م.ط")
+        for code, qv in (pth.get("itemQty") or {}).items():
+            it = store.item(code)
+            rows_m += _row(it["name"] if it else code, f"{qv:g} {it['unit'] if it else ''}")
+        if (pth.get("shared") or 0) > .5:
+            rows_m += _row("جزء مشترك", f"{pth['shared']} م مع " + "، ".join(_esc(x["n"]) for x in pth.get("with") or []))
+        path_html = f'<h2>المسار على المخطط التنظيمي — قطعة {_esc(pth.get("parcel"))}</h2>'
+        if path_img:
+            path_html += '<p class="c"><img src="img://path" width="640"></p>'
+        path_html += f'<table width="100%">{rows_m}</table>'
+
     parcel = ""
     if s.get("parcel"):
         p = s["parcel"]
@@ -139,6 +186,7 @@ td.n {{ text-align: left; }}
 <hr>
 <h2>بيانات المعاملة</h2>
 <table width="100%">{info}</table>
+{plan_html}
 <h2>الكميات والكلفة</h2>
 <table width="100%">
 <tr><th>الكلفة</th><th>سعر الوحدة</th><th>الكمية</th><th>الوحدة</th><th>البند</th><th>الكود</th></tr>
@@ -146,6 +194,8 @@ td.n {{ text-align: left; }}
 <tr><td class="total n">{format_num(total)}</td><td colspan="5" class="total">إجمالي كلفة الشارع</td></tr>
 </table>
 {walls_html}
+{path_html}
+{plan_page}
 {parcel}
 {gallery}
 <br><p class="muted c">تم عمل هذا التطبيق بواسطة المهندس عمر الحمادين</p>
@@ -175,6 +225,27 @@ def write_pdf(store, street, path):
         except ValueError as e:
             parcel_info = str(e)
 
+    plan_img = path_img = False
+    sp = street.get("sitePlan")
+    if sp and sp.get("path"):
+        try:
+            img = (site_plan.render_first_page(sp["path"], 1300) if sp["path"].lower().endswith(".pdf")
+                   else QImage(sp["path"]))
+            if img is not None and not img.isNull():
+                doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl("img://plan"), img)
+                plan_img = True
+        except Exception:  # noqa: BLE001
+            pass
+    if street.get("path"):
+        try:
+            from .pages.map_page import render_path_image
+            img = render_path_image(street["path"])
+            if img is not None:
+                doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl("img://path"), img)
+                path_img = True
+        except Exception:  # noqa: BLE001
+            pass
+
     images = []
     for i, a in enumerate(street.get("attachments") or []):
         if a.get("isImage") and a.get("path"):
@@ -188,7 +259,7 @@ def write_pdf(store, street, path):
             wpx = 640 if img.width() >= img.height() else int(640 * img.width() / img.height() * 0.9)
             images.append((i, a["name"], max(200, wpx)))
 
-    doc.setHtml(build_html(store, street, parcel_img, parcel_info, images))
+    doc.setHtml(build_html(store, street, parcel_img, parcel_info, images, plan_img, path_img))
 
     writer = QPdfWriter(path)
     writer.setTitle(f"تقرير دراسة شارع — {street.get('name', '')}")
@@ -211,6 +282,8 @@ def export_report(store, street, out_dir, with_excel=True):
     s = dict(street)
     if s.get("parcel"):
         s["parcel"] = dict(s["parcel"], path=store.attachment_path(s["parcel"]))
+    if s.get("sitePlan"):
+        s["sitePlan"] = dict(s["sitePlan"], path=store.attachment_path(s["sitePlan"]))
     s["attachments"] = [dict(a, path=store.attachment_path(a)) for a in s.get("attachments") or []]
 
     write_pdf(store, s, os.path.join(folder, f"{name}.pdf"))
@@ -220,6 +293,16 @@ def export_report(store, street, out_dir, with_excel=True):
     if s.get("parcel") and os.path.exists(s["parcel"]["path"]):
         ext = os.path.splitext(s["parcel"]["name"])[1].lower()
         shutil.copy2(s["parcel"]["path"], _unique(os.path.join(folder, f"{name} - مخطط القطعة{ext}")))
+    if s.get("sitePlan") and os.path.exists(s["sitePlan"]["path"]):
+        ext = os.path.splitext(s["sitePlan"]["name"])[1].lower()
+        shutil.copy2(s["sitePlan"]["path"], _unique(os.path.join(folder, f"{name} - مخطط الموقع{ext}")))
+    if s.get("path"):
+        try:
+            from . import dxf_export
+            dxf_export.write_path_dxf(s["path"], street.get("name", ""),
+                                      _unique(os.path.join(folder, f"{name} - المسار.dxf")))
+        except Exception:  # noqa: BLE001
+            pass
     for a in s["attachments"]:
         if os.path.exists(a["path"]):
             shutil.copy2(a["path"], _unique(os.path.join(folder, f"{name} - {safe_filename(a['name'])}")))

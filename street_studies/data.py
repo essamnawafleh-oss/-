@@ -44,7 +44,7 @@ _DRAIN = "تصريف مياه الأمطار"
 
 DEFAULT_ITEMS = [
     {"code": "RD-001", "group": _ROADS, "name": "تسوية", "unit": "م²", "price": 0, "auto": "tasweya"},
-    {"code": "RD-004", "group": _ROADS, "name": "Base Course", "unit": "م³", "price": 0, "auto": "basecourse"},
+    {"code": "RD-004", "group": _ROADS, "name": "Base Course", "unit": "م²", "price": 0, "auto": "basecourse"},
     {"code": "ASP-002", "group": _ROADS, "name": "خلطة إسفلتية ساخنة", "unit": "م²", "price": 0, "auto": "khalta"},
     {"code": "ASP-001", "group": _ROADS, "name": "قشط إسفلت", "unit": "م²", "price": 0},
     {"code": "RD-002", "group": _ROADS, "name": "حفر", "unit": "م³", "price": 0},
@@ -54,7 +54,7 @@ DEFAULT_ITEMS = [
     {"code": "RD-007", "group": _ROADS, "name": "حبسات", "unit": "م³", "price": 0},
     {"code": "RD-008", "group": _ROADS, "name": "دهان طرق", "unit": "م²", "price": 0},
     {"code": "RD-009", "group": _ROADS, "name": "دهان كندرين", "unit": "م.ط", "price": 0},
-    {"code": "RD-010", "group": _ROADS, "name": "كندرين", "unit": "م²", "price": 0},
+    {"code": "RD-010", "group": _ROADS, "name": "كندرين", "unit": "م.ط", "price": 0},
     {"code": "RD-011", "group": _ROADS, "name": "بلاط", "unit": "م²", "price": 0},
     {"code": "RD-012", "group": _ROADS, "name": "إنترلوك", "unit": "م²", "price": 0},
     {"code": "RD-013", "group": _ROADS, "name": "ربراب", "unit": "م²", "price": 0},
@@ -62,7 +62,7 @@ DEFAULT_ITEMS = [
     {"code": "RD-015", "group": _ROADS, "name": "قناة خرسانية مسلحة", "unit": "م³", "price": 0},
     {"code": "RD-016", "group": _ROADS, "name": "عبارة صندوقية", "unit": "م³", "price": 0},
     {"code": "RD-017", "group": _ROADS, "name": "جدران حجرية", "unit": "م.ط", "price": 0},
-    {"code": "RD-018", "group": _ROADS, "name": "mc", "unit": "م²", "price": 0},
+    {"code": "RD-018", "group": _ROADS, "name": "mc", "unit": "م²", "price": 0, "auto": "mc"},
     {"code": "RD-019", "group": _ROADS, "name": "مدة خرسانية", "unit": "م²", "price": 0},
     {"code": "RD-020", "group": _ROADS, "name": "مدة خرسانية مسلحة", "unit": "م²", "price": 0},
     {"code": "DRN-001", "group": _DRAIN, "name": "أنبوب Ø400", "unit": "م.ط", "price": 0},
@@ -70,8 +70,7 @@ DEFAULT_ITEMS = [
     {"code": "DRN-003", "group": _DRAIN, "name": "أنبوب Ø1000", "unit": "م.ط", "price": 0},
     {"code": "DRN-004", "group": _DRAIN, "name": "أنبوب Ø1200", "unit": "م.ط", "price": 0},
     {"code": "DRN-005", "group": _DRAIN, "name": "منهل تصريف", "unit": "عدد", "price": 0},
-    {"code": "DRN-006", "group": _DRAIN, "name": "مصيدة مياه", "unit": "عدد", "price": 0},
-    {"code": "DRN-007", "group": _DRAIN, "name": "Grating", "unit": "عدد", "price": 0},
+    {"code": "DRN-006", "group": _DRAIN, "name": "جرلات", "unit": "م.ط", "price": 0},
 ]
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
@@ -146,13 +145,15 @@ def wall_totals(walls):
 
 
 def auto_quantities(length, width, mix_type):
-    """الكميات التلقائية: التسوية = (عرض+2)×طول، البيس = (عرض+1)×طول، الخلطة = عرض×طول."""
+    """الكميات التلقائية: التسوية = (عرض+2)×طول، البيس كورس = (عرض+1)×طول، mc = كمية البيس، الخلطة = عرض×طول."""
     if not (length and width):
-        return {"RD-001": None, "RD-004": None, "ASP-002": None}
+        return {"RD-001": None, "RD-004": None, "RD-018": None, "ASP-002": None}
     on_mix = mix_type == MIX_ON_MIX
+    base = 0.0 if on_mix else round((width + 1) * length, 2)
     return {
         "RD-001": 0.0 if on_mix else round((width + 2) * length, 2),
-        "RD-004": 0.0 if on_mix else round((width + 1) * length, 2),
+        "RD-004": base,
+        "RD-018": base,
         "ASP-002": round(width * length, 2),
     }
 
@@ -202,7 +203,11 @@ class Store:
         self.regions = regions if isinstance(regions, list) and regions else list(DEFAULT_REGIONS)
         # نبدأ دائماً من البنود الافتراضية ونمرّر الأسعار المحفوظة
         prices = {}
+        current = {it["code"]: it["name"] for it in DEFAULT_ITEMS}
         for it in raw.get("items") or []:
+            # بند أُعيد استخدام كوده لشيء مختلف (مثل DRN-006 «مصيدة مياه» ← «جرلات») لا يرث السعر القديم
+            if isinstance(it, dict) and it.get("name") and current.get(it.get("code")) not in (None, it["name"]):
+                continue
             if isinstance(it, dict) and it.get("code"):
                 try:
                     prices[it["code"]] = float(it.get("price") or 0)
@@ -253,9 +258,56 @@ class Store:
     def purge_orphan_attachments(self):
         used = {a.get("file") for s in self.streets for a in s.get("attachments") or []}
         used |= {s["parcel"].get("file") for s in self.streets if s.get("parcel")}
+        used |= {s["sitePlan"].get("file") for s in self.streets if s.get("sitePlan")}
         for fn in os.listdir(self.attach_dir):
             if fn not in used:
                 try:
                     os.remove(os.path.join(self.attach_dir, fn))
                 except OSError:
                     pass
+
+
+# ========== اكتشاف التكرار والدمج ==========
+def normalize_name(s):
+    s = re.sub(r"[ً-ْـ]", "", str(s or ""))  # تشكيل وتطويل
+    s = s.translate(str.maketrans("أإآىة", "ااايه"))
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def normalize_piece(s):
+    s = str(s or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    s = re.sub(r"\D", "", s)
+    return s.lstrip("0") or ("0" if s else "")
+
+
+def find_duplicates(streets, name="", piece="", basin_no="", exclude=-1):
+    """سجلات محفوظة لنفس القطعة (ونفس الحوض إن عُرف) أو لنفس المالك. يرجع [(الفهرس، السبب)]."""
+    out = []
+    n, p, b = normalize_name(name), normalize_piece(piece), normalize_piece(basin_no)
+    for i, s in enumerate(streets):
+        if i == exclude:
+            continue
+        sp = normalize_piece(s.get("pieceNo"))
+        sb = normalize_piece((s.get("plan") or {}).get("basinNo"))
+        same_piece = bool(p) and sp == p and (not b or not sb or sb == b)
+        same_owner = bool(n) and len(n.split()) >= 2 and normalize_name(s.get("name")) == n
+        if same_piece or same_owner:
+            out.append((i, "نفس القطعة" if same_piece and not same_owner else
+                        "نفس المالك" if same_owner and not same_piece else "نفس القطعة والمالك"))
+    return out
+
+
+def merge_street(old, new):
+    """دمج سجل جديد مع سجل محفوظ: القيم الجديدة تغلب، وما لم يُدخل في الجديد يبقى من القديم."""
+    out = copy.deepcopy(old)
+    for k, v in new.items():
+        if k in ("quantities", "plan"):
+            merged = dict(old.get(k) or {})
+            merged.update({kk: vv for kk, vv in (v or {}).items() if vv not in (None, "", 0)})
+            out[k] = merged
+        elif k == "attachments":
+            files = {a.get("file") for a in old.get(k) or []}
+            out[k] = list(old.get(k) or []) + [a for a in v or [] if a.get("file") not in files]
+        elif v not in (None, "", [], {}, 0, 0.0):
+            out[k] = copy.deepcopy(v)
+    return out

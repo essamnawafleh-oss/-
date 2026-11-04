@@ -14,13 +14,14 @@ from ..data import (
     CAD_EXTS, MIX_ON_BASE, MIX_ON_MIX, REINFORCED_TABLE, WALL_REINFORCED_CODE, WALL_RUBBLE_CODE,
     calc_reinforced, calc_rubble, format_file_size, format_num, resource_path,
 )
-from ..dialogs import ImageDialog
+from ..dialogs import DuplicateDialog, ImageDialog
+from .site_plan_card import SitePlanCard
 from ..theme import C, S1, S2, S3, S4, S6, S8
 from ..widgets import (
     Banner, Card, ChoiceGroup, Field, NumberEdit, button, grid, icon, label, repolish,
 )
 
-AUTO_CODES = ("RD-001", "RD-004", "ASP-002")
+AUTO_CODES = ("RD-001", "RD-004", "RD-018", "ASP-002")
 WALL_CODES = (WALL_RUBBLE_CODE, WALL_REINFORCED_CODE)
 
 
@@ -148,6 +149,8 @@ class AttachmentCard(QFrame):
 
 class EntryPage(QWidget):
     saved = Signal()
+    path_changed = Signal()
+    map_requested = Signal()
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -158,6 +161,8 @@ class EntryPage(QWidget):
         self.wall_seq = 0
         self.attachments = []
         self.parcel = None
+        self.map_path = None
+        self._dup_ok = False   # المستخدم اختار «سجل جديد» رغم وجود سجل مشابه
         self.manual = set()
         self.qty = {}
         self._building = False
@@ -185,6 +190,9 @@ class EntryPage(QWidget):
         col.addWidget(self.banner)
 
         col.addWidget(self._region_card())
+        self.plan_card = SitePlanCard(store)
+        self.plan_card.plan_read.connect(self.on_plan_read)
+        col.addWidget(self.plan_card)
         col.addWidget(self._street_card())
         col.addWidget(self._parcel_card())
         col.addWidget(self._mix_card())
@@ -221,7 +229,7 @@ class EntryPage(QWidget):
         return card
 
     def _street_card(self):
-        card = Card("بيانات المواطن والشارع", step=2)
+        card = Card("بيانات المواطن والشارع", step=3)
         self.name = QLineEdit()
         self.name.setPlaceholderText("مثال: أحمد محمد")
         self.piece = QLineEdit()
@@ -237,8 +245,37 @@ class EntryPage(QWidget):
         self.notes = QPlainTextEdit()
         self.notes.setPlaceholderText("أي ملاحظات…")
         self.notes.setFixedHeight(self.notes.fontMetrics().lineSpacing() * 3 + 22)
-        card.body.addLayout(grid([Field("اسم المواطن *", self.name), Field("رقم القطعة", self.piece),
-                                  QWidget()], 3))
+        map_btn = button("ارسم / عدّل على المخطط", None, "mdi6.map-marker-path")
+        map_btn.setToolTip("حدّد القطعة وارسم الشارع والجدران والبنود على المخطط التنظيمي")
+        map_btn.clicked.connect(self.map_requested.emit)
+        mb = QWidget()
+        ml = QVBoxLayout(mb)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(S1 + 2)
+        ml.addWidget(label("المسار على المخطط", "fieldLabel"))
+        ml.addWidget(map_btn)
+        card.body.addLayout(grid([Field("اسم المواطن *", self.name), Field("رقم القطعة", self.piece), mb], 3))
+        # حالة المسار المرسوم
+        self.path_row = QFrame()
+        self.path_row.setObjectName("subCard")
+        pr = QHBoxLayout(self.path_row)
+        pr.setContentsMargins(S3, S2, S3, S2)
+        pr.setSpacing(S2)
+        pic = QLabel()
+        pic.setPixmap(icon("mdi6.map-marker-path", C["accent_fg"]).pixmap(20, 20))
+        pr.addWidget(pic)
+        self.path_status = label("", "caption", wrap=True)
+        pr.addWidget(self.path_status, 1)
+        dxf_btn = button("تصدير DXF", "secondary", "mdi6.file-cad")
+        dxf_btn.setProperty("compact", True)
+        dxf_btn.clicked.connect(self.export_path_dxf)
+        del_btn = button("حذف المسار", "danger", "mdi6.trash-can-outline")
+        del_btn.setProperty("compact", True)
+        del_btn.clicked.connect(self.delete_path)
+        pr.addWidget(dxf_btn)
+        pr.addWidget(del_btn)
+        card.body.addWidget(self.path_row)
+        self.path_changed.connect(self.render_path_status)
         card.body.addLayout(grid([Field("الطول (م) *", self.length), Field("العرض (م) *", self.width),
                                   Field("مساحة الطريق (م²)", self.area)], 3))
         card.body.addWidget(Field("ملاحظات", self.notes))
@@ -249,7 +286,7 @@ class EntryPage(QWidget):
         return card
 
     def _mix_card(self):
-        card = Card("نوع الخلطة الساخنة", step=3)
+        card = Card("نوع الخلطة الساخنة", step=4)
         self.mix = ChoiceGroup([("خلطة على بيس كورس", "تسوية + بيس كورس + خلطة", MIX_ON_BASE),
                                 ("خلطة على خلطة", "التسوية والبيس كورس = صفر", MIX_ON_MIX)])
         self.mix.changed.connect(lambda _: self.update_auto())
@@ -634,6 +671,10 @@ class EntryPage(QWidget):
         self.attachments = []
         self.render_attachments()
         self.set_parcel(None)
+        self.plan_card.clear()
+        self.map_path = None
+        self._dup_ok = False
+        self.path_changed.emit()
         self.fill_regions()
         self.update_auto()
 
@@ -651,6 +692,9 @@ class EntryPage(QWidget):
             "walls": copy.deepcopy(self.walls),
             "attachments": copy.deepcopy(self.attachments),
             "parcel": copy.deepcopy(self.parcel),
+            "sitePlan": copy.deepcopy(self.plan_card.attachment),
+            "plan": self.plan_card.values(),
+            "path": copy.deepcopy(self.map_path),
         }
 
     def snapshot(self):
@@ -685,6 +729,16 @@ class EntryPage(QWidget):
             return
 
         street = self.collect()
+        if self.edit_index < 0 and not self._dup_ok:
+            plan = street.get("plan") or {}
+            dups = data.find_duplicates(self.store.streets, street["name"], street["pieceNo"], plan.get("basinNo"))
+            if dups:
+                dlg = DuplicateDialog(self.store, dups, saving=True, parent=self.window())
+                if not dlg.exec():
+                    return
+                if dlg.choice is not None:  # دمج مع السجل الموجود
+                    self.edit_index = dlg.choice
+                    street = data.merge_street(self.store.streets[dlg.choice], street)
         updating = self.edit_index >= 0
         if updating:
             self.store.streets[self.edit_index] = street
@@ -702,6 +756,119 @@ class EntryPage(QWidget):
 
     def edit_street(self, idx):
         self.load_street(self.store.streets[idx], idx)
+
+    # ---------- المسار على المخطط
+    def render_path_status(self):
+        p = self.map_path
+        self.path_row.setVisible(bool(p))
+        if not p:
+            return
+        parts = [f"قطعة {p.get('parcel') or '—'}"]
+        if p.get("roads"):
+            parts.append(f"شارع {p.get('bill', 0):.2f} م × {p.get('w', 0):g} م ({len(p['roads'])} خط)")
+        if p.get("wallRLen"):
+            parts.append(f"جدار دبش {p['wallRLen']:.1f} م.ط")
+        if p.get("wallCLen"):
+            parts.append(f"جدار مسلح {p['wallCLen']:.1f} م.ط")
+        for code, q in (p.get("itemQty") or {}).items():
+            it = self.store.item(code)
+            parts.append(f"{it['name'] if it else code} {q:g} {it['unit'] if it else ''}")
+        if (p.get("shared") or 0) > .5:
+            parts.append(f"مشترك {p['shared']} م مع " + "، ".join(x["n"] for x in p.get("with") or []))
+        txt = "مرتبط بالمخطط: " + " · ".join(parts)
+        if p.get("out"):
+            txt += "  ⚠ الشارع بعيد عن حدود القطعة"
+        self.path_status.setText(txt)
+
+    def apply_map_path(self, path):
+        """ربط نتائج الرسم بالنموذج: الطول والعرض وكميات البنود والجدران."""
+        self.map_path = path
+        if path.get("roads"):
+            self.width.set_value(path.get("w"))
+            self.length.set_value(path.get("bill"), 2)
+        if path.get("parcel") and not self.piece.text().strip():
+            self.piece.setText(path["parcel"])
+        for code, q in (path.get("itemQty") or {}).items():
+            e = self.qty.get(code)
+            if e is not None:
+                e.set_value(q, 2 if q != int(q) else None)
+                if code in AUTO_CODES:
+                    self.manual.add(code)
+        # أطوال الجدران ← بطاقات الجدران (نعدّل الجدار المرتبط بالمخطط أو ننشئه)
+        for kind, length_key, field in (("rubble", "wallRLen", "L"), ("reinforced", "wallCLen", "length")):
+            L = path.get(length_key) or 0
+            if L <= 0:
+                continue
+            same = [w for w in self.walls if (w["type"] == "reinforced") == (kind == "reinforced")]
+            w = next((x for x in same if x.get("fromMap")), same[0] if same else None)
+            if w is None:
+                self.wall_seq += 1
+                w = ({"id": self.wall_seq, "type": "rubble", "L": 0, "H": 1.5, "hb": 0.5} if kind == "rubble"
+                     else {"id": self.wall_seq, "type": "reinforced", "h": 150, "length": 0})
+                self.walls.append(w)
+            w[field] = round(L, 2)
+            w["fromMap"] = True
+        self.render_walls()
+        self.update_auto()
+        self.path_changed.emit()
+        msg = "تم ربط الرسم بالنموذج"
+        if path.get("roads"):
+            msg += f": طول الشارع المحتسب {path['bill']:.2f} م × عرض {path['w']:g} م"
+        if (path.get("shared") or 0) > .5:
+            msg += f" (بعد استبعاد/تقسيم المشترك {path['shared']} م)"
+        self.banner.show_msg(msg + ". اضغط «حفظ» لإتمام السجل.", "warning" if path.get("out") else "success")
+
+    def delete_path(self):
+        self.map_path = None
+        self.path_changed.emit()
+
+    def export_path_dxf(self):
+        if not self.map_path:
+            return
+        from .. import dxf_export
+        from ..data import safe_filename
+        name = safe_filename(self.name.text() or "مسار")
+        path, _ = QFileDialog.getSaveFileName(self, "حفظ ملف DXF", os.path.join(os.path.expanduser("~"),
+                                              f"{name} - المسار.dxf"), "DXF (*.dxf)")
+        if path:
+            try:
+                dxf_export.write_path_dxf(self.map_path, self.name.text(), path)
+                self.banner.show_msg(f"تم حفظ {os.path.basename(path)}", "success")
+            except Exception as e:  # noqa: BLE001
+                self.banner.show_msg(f"تعذّر حفظ DXF: {e}", "danger")
+
+    # ---------- مخطط الموقع
+    def on_plan_read(self, plan):
+        """بعد قراءة المخطط: تعبئة اسم المالك ورقم القطعة، ثم التحقق من وجود سجل سابق."""
+        filled = []
+        if plan.get("owner"):
+            self.name.setText(plan["owner"])
+            self._set_error(self.name, False)
+            filled.append("اسم المالك")
+        if plan.get("pieceNo"):
+            self.piece.setText(plan["pieceNo"])
+            filled.append("رقم القطعة")
+        dups = data.find_duplicates(self.store.streets, plan.get("owner"), plan.get("pieceNo"),
+                                    plan.get("basinNo"), exclude=self.edit_index)
+        if dups and not self._dup_ok:
+            dlg = DuplicateDialog(self.store, dups, saving=False, parent=self.window())
+            if not dlg.exec():   # إلغاء: إزالة المخطط الجديد
+                self.plan_card.clear()
+                return
+            if dlg.choice is not None:
+                # تحديث السجل الموجود: نفتحه بكل معلوماته المحفوظة ثم نضيف بيانات المخطط الجديد فوقها
+                att, values = self.plan_card.attachment, self.plan_card.values()
+                self.load_street(self.store.streets[dlg.choice], dlg.choice)
+                self.plan_card.set_plan(att, values, ("تم فتح السجل المحفوظ وإضافة بيانات المخطط الجديد إليه — "
+                                                      "راجع ثم اضغط «تحديث السجل».", "info"))
+                if plan.get("owner"):
+                    self.name.setText(plan["owner"])
+                if plan.get("pieceNo"):
+                    self.piece.setText(plan["pieceNo"])
+                return
+            self._dup_ok = True
+        if filled:
+            self.banner.show_msg("من مخطط الموقع: تمت تعبئة " + " و".join(filled) + ".", "success")
 
     def load_street(self, s, idx):
         self.clear_form()
@@ -730,6 +897,9 @@ class EntryPage(QWidget):
         self.attachments = copy.deepcopy(s.get("attachments") or [])
         self.render_attachments()
         self.set_parcel(copy.deepcopy(s.get("parcel")))
+        self.plan_card.set_plan(copy.deepcopy(s.get("sitePlan")), copy.deepcopy(s.get("plan")))
+        self.map_path = copy.deepcopy(s.get("path"))
+        self.path_changed.emit()
         self.length.blockSignals(True)
         self.width.blockSignals(True)
         self.length.set_value(s.get("length") or None)

@@ -62,7 +62,8 @@ def build_workbook(store, streets, region="", tender=""):
     ws = wb.create_sheet(STREETS_SHEET)
     ws.sheet_view.rightToLeft = True
     base = ["اسم المواطن", "رقم القطعة", "المنطقة", "طبيعة العطاء", "نوع الخلطة",
-            "الطول (م)", "العرض (م)", "مساحة الطريق (م²)", "ملاحظات"]
+            "الطول (م)", "العرض (م)", "مساحة الطريق (م²)", "ملاحظات",
+            "رقم اللوحة", "الحوض", "الحي", "مساحة القطعة (م²)", "استعمال القطعة"]
     nb = len(base)
     headers = list(base)
     for it in items:
@@ -94,6 +95,12 @@ def build_workbook(store, streets, region="", tender=""):
         row = [s.get("name", ""), s.get("pieceNo") or "", s.get("region") or "", s.get("tenderType") or "",
                "خلطة على خلطة" if s.get("mixType") == "على_خلطة" else "خلطة على بيس كورس",
                s.get("length"), s.get("width"), f"=F{rn}*G{rn}", s.get("notes") or ""]
+        plan = s.get("plan") or {}
+        row += [plan.get("plate") or "",
+                f"{plan.get('basin', '')} ({plan['basinNo']})" if plan.get("basinNo") else plan.get("basin") or "",
+                f"{plan.get('hay', '')} ({plan['hayNo']})" if plan.get("hayNo") else plan.get("hay") or "",
+                float(plan["parcelArea"]) if str(plan.get("parcelArea") or "").replace(".", "", 1).isdigit() else "",
+                plan.get("landUse") or ""]
         cost_refs = []
         q = s.get("quantities") or {}
         for ci, it in enumerate(items):
@@ -113,7 +120,7 @@ def build_workbook(store, streets, region="", tender=""):
                 cell.fill = _CALC_FILL
         ws.cell(row=rn, column=ncols).font = Font(bold=True)
 
-    widths = [22, 10, 16, 12, 18, 9, 9, 12, 24] + [12, 12] * len(items) + [16]
+    widths = [22, 10, 16, 12, 18, 9, 9, 12, 24, 9, 16, 16, 11, 18] + [12, 12] * len(items) + [16]
     for i, w in enumerate(widths):
         ws.column_dimensions[_col(i)].width = w
     ws.freeze_panes = ws.cell(row=5, column=2)

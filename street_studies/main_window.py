@@ -12,6 +12,7 @@ from . import theme
 from .data import Store, resource_path
 from .pages.appearance import AppearancePage
 from .pages.entry import EntryPage
+from .pages.map_page import MapPage
 from .pages.export import ExportPage
 from .pages.prices import PricesPage
 from .pages.streets_list import StreetsListPage
@@ -22,6 +23,7 @@ from .widgets import label
 NAV = [
     ("entry", "إدخال الشوارع", "mdi6.road-variant"),
     ("list", "قائمة الشوارع", "mdi6.format-list-bulleted"),
+    ("map", "المخطط والمسارات", "mdi6.map-outline"),
     ("prices", "الأسعار والبنود", "mdi6.tag-outline"),
     ("summary", "الملخص", "mdi6.chart-box-outline"),
     ("export", "تصدير Excel", "mdi6.microsoft-excel"),
@@ -76,8 +78,10 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         h.addWidget(self.stack, 1)
 
+        entry = EntryPage(self.store)
         self.pages = {
-            "entry": EntryPage(self.store),
+            "entry": entry,
+            "map": MapPage(self.store, self.settings, entry),
             "list": StreetsListPage(self.store),
             "prices": PricesPage(self.store),
             "summary": SummaryPage(self.store),
@@ -88,6 +92,9 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(self.pages[key])
 
         self.pages["entry"].saved.connect(self.update_badge)
+        self.pages["entry"].map_requested.connect(self.open_map)
+        self.pages["map"].back_requested.connect(lambda: self.go("entry"))
+        self.pages["map"].path_saved.connect(self.on_path_saved)
         self.pages["list"].edit_requested.connect(self.edit_street)
         self.pages["list"].changed.connect(self.update_badge)
         self.pages["prices"].changed.connect(self.pages["entry"].update_live_cost)
@@ -160,6 +167,16 @@ class MainWindow(QMainWindow):
 
     def edit_street(self, idx):
         self.pages["entry"].edit_street(idx)
+        self.nav["entry"].setChecked(True)
+        self.stack.setCurrentWidget(self.pages["entry"])
+
+    def open_map(self):
+        self.nav["map"].setChecked(True)
+        self.stack.setCurrentWidget(self.pages["map"])
+        QTimer.singleShot(0, self.pages["map"].open_for_form)
+
+    def on_path_saved(self, path):
+        self.pages["entry"].apply_map_path(path)
         self.nav["entry"].setChecked(True)
         self.stack.setCurrentWidget(self.pages["entry"])
 

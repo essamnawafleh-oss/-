@@ -30,6 +30,19 @@ jobs:
           $v = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '1.0.0' }
           "APP_VERSION=$v" >> $env:GITHUB_ENV
 
+      - name: Prepare Tesseract OCR (Arabic)
+        shell: pwsh
+        run: |
+          choco install tesseract -y --no-progress
+          $src = "C:\Program Files\Tesseract-OCR"
+          if (-not (Test-Path "$src\tesseract.exe")) { throw "tesseract not found at $src" }
+          New-Item -ItemType Directory -Force vendor | Out-Null
+          Copy-Item $src vendor\tesseract -Recurse
+          Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata/raw/main/ara.traineddata" -OutFile vendor\tesseract\tessdata\ara.traineddata
+          Get-ChildItem vendor\tesseract\tessdata\*.traineddata | Where-Object { $_.Name -notin @('ara.traineddata','eng.traineddata','osd.traineddata') } | Remove-Item
+          Remove-Item -Recurse -Force vendor\tesseract\doc -ErrorAction SilentlyContinue
+          & vendor\tesseract\tesseract.exe --list-langs
+
       - name: Build exe (PyInstaller)
         run: pyinstaller --noconfirm build.spec
 

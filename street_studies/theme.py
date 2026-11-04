@@ -403,6 +403,24 @@ QScrollBar::handle:horizontal:hover { background: %(scroll_hover)s; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 
+/* صفحة المخطط */
+QFrame#mapPanel { background: %(card)s; border: none; border-left: 1px solid %(border)s; }
+QFrame#mapPanel QWidget#scrollBody { background: %(card)s; }
+QPushButton#dtype {
+    background: %(subtle)s; color: %(text)s; border: 1px solid %(border_strong)s; border-radius: 6px;
+    padding: 5px 2px; font-size: 9pt; font-weight: 600;
+}
+QPushButton#dtype:hover { border-color: %(accent2)s; }
+QPushButton#dtype:checked { background: %(accent)s; color: %(on_accent)s; border-color: %(accent)s; }
+QListWidget { background: %(input_bg)s; border: 1px solid %(border)s; border-radius: 6px; color: %(text)s; }
+QListWidget::item { padding: 4px 6px; }
+QListWidget::item:selected, QListWidget::item:hover { background: %(accent_soft)s; color: %(accent_fg)s; }
+QCheckBox { spacing: 6px; }
+QSlider::groove:horizontal { height: 4px; background: %(border)s; border-radius:2px; }
+QSlider::handle:horizontal { background: %(accent)s; width: 14px; margin: -6px 0; border-radius:7px; }
+QProgressBar { background: %(border)s; border: none; border-radius:3px; }
+QProgressBar::chunk { background: %(accent)s; border-radius:3px; }
+
 QMessageBox { background: %(window)s; }
 QMessageBox QLabel { font-size: 10pt; }
 QMenu { background: %(card)s; border: 1px solid %(border)s; padding: 4px; }

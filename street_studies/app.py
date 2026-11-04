@@ -1,7 +1,7 @@
 """نقطة تشغيل التطبيق."""
 import sys
 
-from PySide6.QtCore import QLocale, Qt
+from PySide6.QtCore import QLocale, Qt  # noqa: F401
 from PySide6.QtWidgets import QApplication
 
 from . import theme
@@ -37,6 +37,8 @@ def main():
     store.purge_orphan_attachments()
     win = MainWindow(store, settings)
     win.show()
+    from .geo import GeoStore
+    GeoStore.preload()
     sys.exit(app.exec())
 
 
@@ -80,6 +82,40 @@ def _smoke_test(app):
     if not os.path.exists(os.path.join(folder, "اختبار.pdf")):
         print("report failed")
         return 4
+    # قراءة مخطط موقع PDF (يتأكد أن PyMuPDF مضمّنة) — نقرأ التقرير الذي أنشأناه للتو
+    from . import geo, site_plan
+    import pymupdf
+    if len(pymupdf.open(os.path.join(folder, "اختبار.pdf"))[0].get_text().strip()) < 40:
+        print("pymupdf failed")
+        return 5
+    exe = site_plan.tesseract_path()
+    print("tesseract:", exe or "غير موجود")
+    if exe:
+        # قراءة صورة نص عربي مولّدة (OCR) والتحقق من استخراج رقم القطعة
+        from PySide6.QtGui import QColor, QFont, QImage, QPainter
+        img = QImage(1600, 260, QImage.Format.Format_RGB32)
+        img.fill(QColor("white"))
+        p = QPainter(img)
+        f = QFont()
+        f.setFamilies(["IBM Plex Sans Arabic"])
+        f.setPixelSize(44)
+        p.setFont(f)
+        p.setPen(QColor("black"))
+        p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "رقم القطعة : 00132   رقم اللوحة : 109")
+        p.end()
+        png = os.path.join(tmp, "ocr.png")
+        img.save(png)
+        data, _ = site_plan.read_site_plan(png)
+        print("ocr:", data)
+        if data.get("pieceNo") != "00132" and os.path.isdir(resource_path("tesseract")):
+            print("ocr failed")
+            return 7
+    g = geo.GeoStore.get()
+    if len(g.datasets[0].polys) < 1000:
+        print("geo failed")
+        return 6
+    win.go("map")
+    win.pages["map"].open_for_form()
     QTimer.singleShot(800, app.quit)
     app.exec()
     print("smoke test ok")
