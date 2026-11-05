@@ -832,7 +832,7 @@ class EntryPage(QWidget):
                                               f"{name} - المسار.dxf"), "DXF (*.dxf)")
         if path:
             try:
-                dxf_export.write_path_dxf(self.map_path, self.name.text(), path)
+                dxf_export.write_path_dxf(self.map_path, self.name.text(), path, self.store.items)
                 self.banner.show_msg(f"تم حفظ {os.path.basename(path)}", "success")
             except Exception as e:  # noqa: BLE001
                 self.banner.show_msg(f"تعذّر حفظ DXF: {e}", "danger")

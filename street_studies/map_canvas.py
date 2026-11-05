@@ -1,6 +1,7 @@
 """لوحة الخريطة: رسم المخطط التنظيمي والصورة الجوية، التكبير والتحريك، والتقاط النقاط (OSNAP)."""
 import math
 import os
+import time
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
@@ -22,7 +23,7 @@ class TileCache:
         self.on_ready = on_ready
         self.mem = {}
         self.pending = set()
-        self.failed = set()
+        self.failed = {}   # key -> وقت الفشل (يُعاد المحاولة بعد 20 ثانية)
         self.net = QNetworkAccessManager()
         self.net.finished.connect(self._done)
         self.folder = os.path.join(data_dir(), "tiles")
@@ -30,7 +31,8 @@ class TileCache:
     def _path(self, z, x, y):
         return os.path.join(self.folder, str(z), str(x), f"{y}.jpg")
 
-    def get(self, z, x, y):
+    def peek(self, z, x, y):
+        """البلاطة من الذاكرة أو القرص فقط (بدون طلب من الإنترنت)."""
         key = (z, x, y)
         img = self.mem.get(key)
         if img is not None:
@@ -39,10 +41,19 @@ class TileCache:
         if os.path.exists(p):
             img = QImage(p)
             if not img.isNull():
-                if len(self.mem) > 800:
+                if len(self.mem) > 1500:
                     self.mem.clear()
                 self.mem[key] = img
                 return img
+        return None
+
+    def get(self, z, x, y):
+        key = (z, x, y)
+        img = self.peek(z, x, y)
+        if img is not None:
+            return img
+        if key in self.failed and time.time() - self.failed[key] > 20:
+            del self.failed[key]
         if key not in self.pending and key not in self.failed and len(self.pending) < 64:
             self.pending.add(key)
             req = QNetworkRequest(QUrl(TILE_URL.format(z=z, x=x, y=y)))
@@ -65,7 +76,7 @@ class TileCache:
             self.mem[key] = img
             self.on_ready()
         else:
-            self.failed.add(key)
+            self.failed[key] = time.time()
         reply.deleteLater()
 
 
@@ -264,15 +275,21 @@ class MapCanvas(QWidget):
         lls = [geo.j2ll(x + ox - dx, y + oy - dy) for x, y in corners]
         la0, la1 = min(c[0] for c in lls), max(c[0] for c in lls)
         lo0, lo1 = min(c[1] for c in lls), max(c[1] for c in lls)
-        z = max(8, min(19, round(math.log2(156543.034 * math.cos(math.radians(la0)) * self.s))))
-        Z = 2 ** z
-        tx0, tx1 = int((lo0 + 180) / 360 * Z), int((lo1 + 180) / 360 * Z)
+        # المستوى 18 أعلى دقة متوفرة لهذه المنطقة؛ عند التكبير أكثر نكبّر بلاطات المستوى 18 نفسها
+        z = max(8, min(18, round(math.log2(156543.034 * math.cos(math.radians(la0)) * self.s))))
 
-        def tyf(lat):
-            return int((1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * Z)
-        ty0, ty1 = tyf(la1), tyf(la0)
-        if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 160:
-            return
+        def tiles_at(zz):
+            ZZ = 2 ** zz
+
+            def tyf(lat):
+                return int((1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * ZZ)
+            return int((lo0 + 180) / 360 * ZZ), int((lo1 + 180) / 360 * ZZ), tyf(la1), tyf(la0)
+        tx0, tx1, ty0, ty1 = tiles_at(z)
+        # عند التصغير الشديد نخفض المستوى بدل إخفاء الصورة
+        while (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 140 and z > 8:
+            z -= 1
+            tx0, tx1, ty0, ty1 = tiles_at(z)
+        Z = 2 ** z
 
         def tc(X, Y):
             lo = X / Z * 360 - 180
@@ -286,13 +303,23 @@ class MapCanvas(QWidget):
         for X in range(tx0, tx1 + 1):
             for Y in range(ty0, ty1 + 1):
                 img = self.tiles.get(z, X, Y)
+                src = QRectF(0, 0, 256, 256)
+                if img is None:
+                    # إلى أن تصل البلاطة: نعرض جزءاً مكبّراً من بلاطة أقل دقة محفوظة
+                    for d in range(1, 7):
+                        anc = self.tiles.peek(z - d, X >> d, Y >> d)
+                        if anc is not None:
+                            size = 256 / (1 << d)
+                            src = QRectF((X % (1 << d)) * size, (Y % (1 << d)) * size, size, size)
+                            img = anc
+                            break
                 if img is None:
                     continue
                 A, B, Cc = tc(X, Y), tc(X + 1, Y), tc(X, Y + 1)
                 t = QTransform((B.x() - A.x()) / 256, (B.y() - A.y()) / 256, (Cc.x() - A.x()) / 256,
                                (Cc.y() - A.y()) / 256, A.x(), A.y())
                 p.setTransform(t)
-                p.drawImage(QRectF(0, 0, 256.6, 256.6), img)
+                p.drawImage(QRectF(0, 0, 256.6, 256.6), img, src)
         p.restore()
 
     def _draw_snap(self, p):

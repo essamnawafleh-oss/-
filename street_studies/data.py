@@ -73,6 +73,9 @@ DEFAULT_ITEMS = [
     {"code": "DRN-006", "group": _DRAIN, "name": "جرلات", "unit": "م.ط", "price": 0},
 ]
 
+UNITS = ["م.ط", "عدد", "م²", "م³"]
+# نوع الرسم على المخطط حسب وحدة البند
+DRAW_FOR_UNIT = {"م.ط": "line", "عدد": "point", "م²": "area", "م³": "volume"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 CAD_EXTS = {".dxf", ".dwg"}
 
@@ -202,7 +205,7 @@ class Store:
         regions = raw.get("regions")
         self.regions = regions if isinstance(regions, list) and regions else list(DEFAULT_REGIONS)
         # نبدأ دائماً من البنود الافتراضية ونمرّر الأسعار المحفوظة
-        prices = {}
+        prices, depths = {}, {}
         current = {it["code"]: it["name"] for it in DEFAULT_ITEMS}
         for it in raw.get("items") or []:
             # بند أُعيد استخدام كوده لشيء مختلف (مثل DRN-006 «مصيدة مياه» ← «جرلات») لا يرث السعر القديم
@@ -211,21 +214,50 @@ class Store:
             if isinstance(it, dict) and it.get("code"):
                 try:
                     prices[it["code"]] = float(it.get("price") or 0)
+                    if it.get("depth"):
+                        depths[it["code"]] = float(it["depth"])
                 except (TypeError, ValueError):
                     pass
         self.items = copy.deepcopy(DEFAULT_ITEMS)
+        # البنود التي أضافها المستخدم
+        for it in raw.get("customItems") or []:
+            if isinstance(it, dict) and it.get("code") and it.get("name") and it.get("unit") in UNITS:
+                self.items.append({"code": it["code"], "group": it.get("group") or "بنود إضافية",
+                                   "name": it["name"], "unit": it["unit"], "price": 0, "custom": True})
         for it in self.items:
             if it["code"] in prices:
                 it["price"] = prices[it["code"]]
+            if it["code"] in depths:
+                it["depth"] = depths[it["code"]]
 
     def save(self):
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "items": self.items, "streets": self.streets,
-                       "regions": self.regions}, f, ensure_ascii=False, indent=1)
+            json.dump({"version": 1, "items": self.items, "streets": self.streets, "regions": self.regions,
+                       "customItems": [it for it in self.items if it.get("custom")]},
+                      f, ensure_ascii=False, indent=1)
         os.replace(tmp, self.path)
 
     # ---- البنود
+    def add_item(self, name, unit, group, price=0.0, depth=None):
+        """بند جديد يضيفه المستخدم؛ كوده USR-001 وما بعده."""
+        n = 1 + max([int(it["code"][4:]) for it in self.items
+                     if it["code"].startswith("USR-") and it["code"][4:].isdigit()] + [0])
+        it = {"code": f"USR-{n:03d}", "group": group or "بنود إضافية", "name": name.strip(), "unit": unit,
+              "price": float(price or 0), "custom": True}
+        if depth:
+            it["depth"] = float(depth)
+        self.items.append(it)
+        self.save()
+        return it
+
+    def remove_item(self, code):
+        """حذف بند مضاف (البنود الأساسية لا تُحذف). يرجع عدد السجلات التي كانت تستخدمه."""
+        used = sum(1 for s in self.streets if (s.get("quantities") or {}).get(code))
+        self.items = [it for it in self.items if not (it["code"] == code and it.get("custom"))]
+        self.save()
+        return used
+
     def item(self, code):
         for it in self.items:
             if it["code"] == code:

@@ -85,6 +85,10 @@ def load(path, ink="#1B2428"):
             try:
                 text = e.plain_text() if kind == "MTEXT" else e.dxf.text
                 ins = e.dxf.insert
+                # النص المحاذى (وسط/يمين) موضعه الحقيقي في align_point
+                if kind != "MTEXT" and (e.dxf.get("halign", 0) or e.dxf.get("valign", 0)) \
+                        and e.dxf.hasattr("align_point"):
+                    ins = e.dxf.align_point
                 h = e.dxf.char_height if kind == "MTEXT" else e.dxf.height
                 rot = e.dxf.get("rotation", 0) or 0
                 if text and text.strip():

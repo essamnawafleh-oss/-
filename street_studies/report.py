@@ -300,7 +300,7 @@ def export_report(store, street, out_dir, with_excel=True):
         try:
             from . import dxf_export
             dxf_export.write_path_dxf(s["path"], street.get("name", ""),
-                                      _unique(os.path.join(folder, f"{name} - المسار.dxf")))
+                                      _unique(os.path.join(folder, f"{name} - المسار.dxf")), store.items)
         except Exception:  # noqa: BLE001
             pass
     for a in s["attachments"]:

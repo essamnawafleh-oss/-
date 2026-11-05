@@ -15,8 +15,8 @@ from ..theme import C, S1, S2, S3, S4
 from ..widgets import NumberEdit, button, divider, label, repolish
 
 DTYPES = [("road", "شارع", "طول الشارع"), ("line", "خط", "م.ط"), ("point", "نقاط", "عدد"),
-          ("area", "مساحة", "م²"), ("wallR", "دبش", "جدار"), ("wallC", "مسلح", "جدار")]
-UNIT_OF = {"line": "م.ط", "point": "عدد", "area": "م²"}
+          ("area", "مساحة", "م²"), ("volume", "حجم", "م³"), ("wallR", "دبش", "جدار"), ("wallC", "مسلح", "جدار")]
+UNIT_OF = {"line": "م.ط", "point": "عدد", "area": "م²", "volume": "م³"}
 # بنود لا تُرسم (تُحسب تلقائياً أو دهانات)
 NOT_DRAWN = {"RD-001", "RD-008", "RD-009", "RD-005", "RD-006"}
 SHARE_MODES = [
@@ -26,7 +26,7 @@ SHARE_MODES = [
     ("full", "احتساب كامل لكل مواطن (تكرار)"),
 ]
 COLORS = {"road": "#E8590C", "wallR": "#6D4C41", "wallC": "#546E7A", "line": "#1565C0",
-          "point": "#C62828", "area": "#2E7D32", "other": "#6F42C1"}
+          "point": "#C62828", "area": "#2E7D32", "volume": "#8E24AA", "other": "#6F42C1"}
 
 
 def _rel(P, ox, oy):
@@ -288,7 +288,7 @@ class MapPage(QWidget):
             bt.setAutoExclusive(True)
             bt.setCursor(Qt.CursorShape.PointingHandCursor)
             bt.clicked.connect(lambda _=False, k=key: self.set_dtype(k))
-            grid.addWidget(bt, n // 3, n % 3)
+            grid.addWidget(bt, n // 4, n % 4)
             self.dtype_btns[key] = bt
         self.dtype_btns["road"].setChecked(True)
         self.dtype = "road"
@@ -304,6 +304,18 @@ class MapPage(QWidget):
         iw.addWidget(self.item)
         self.item_hint = label("", "caption", wrap=True)
         iw.addWidget(self.item_hint)
+        dr = QHBoxLayout()
+        dr.addWidget(label("السماكة / العمق (م)", "caption"))
+        self.depth = NumberEdit("0.30")
+        self.depth.setMaximumWidth(110)
+        self.depth.editingFinished.connect(self._depth_changed)
+        dr.addWidget(self.depth)
+        dr.addStretch(1)
+        self.depth_row = QWidget()
+        self.depth_row.setLayout(dr)
+        dr.setContentsMargins(0, 0, 0, 0)
+        iw.addWidget(self.depth_row)
+        self.item.currentIndexChanged.connect(self._item_changed)
         self.item_wrap.hide()
         v.addWidget(self.item_wrap)
         self.osnap = QCheckBox("التقاط تلقائي على الخطوط (OSNAP)")
@@ -510,13 +522,29 @@ class MapPage(QWidget):
             self.item.setCurrentIndex(max(0, i))
             self.item_hint.setText({"line": "ارسم خطاً — الكمية = الطول بالمتر الطولي.",
                                     "point": "كل نقرة = نقطة واحدة في الكمية.",
-                                    "area": "ارسم مضلعاً — الزر الأيمن يغلقه ويحسب م²."}[key])
+                                    "area": "ارسم مضلعاً — الزر الأيمن يغلقه ويحسب م².",
+                                    "volume": "ارسم مضلعاً — الكمية = المساحة × السماكة/العمق (م³)."}[key])
+        self.depth_row.setVisible(key == "volume")
+        self._item_changed()
         if self.drawing:
             self._say(self._hint())
         self.update_totals()
 
+    def _item_changed(self):
+        if self.dtype == "volume":
+            it = self.store.item(self.item.currentData() or "")
+            self.depth.set_value((it or {}).get("depth") or 0.3)
+
+    def _depth_changed(self):
+        it = self.store.item(self.item.currentData() or "")
+        if it is not None and self.depth.value() > 0:
+            it["depth"] = self.depth.value()
+            self.store.save()
+            self.update_totals()
+
     def _hint(self):
         return {"road": "ارسم مسار الشارع: انقر لإضافة نقاط، الزر الأيمن أو نقر مزدوج لتثبيت الخط.",
+                "volume": "حجم م³: انقر رؤوس المضلع، الزر الأيمن يُغلقه (الكمية = المساحة × السماكة).",
                 "line": "خط م.ط: انقر النقاط، الزر الأيمن للتثبيت.",
                 "point": "انقر لإضافة نقاط (كل نقطة = 1).",
                 "area": "مضلع: انقر الرؤوس، الزر الأيمن يُغلق المضلع.",
@@ -559,12 +587,12 @@ class MapPage(QWidget):
             self.history.append(("point", self.item.currentData()))
             self._say(f"نقطة #{len(g['points'])} — {self.item.currentText()}")
         else:
-            if self.dtype in ("line", "area") and not self.item.currentData():
+            if self.dtype in ("line", "area", "volume") and not self.item.currentData():
                 self._say("اختر البند المرتبط أولاً.", True)
                 return
             self.pts.append((x, y))
             if len(self.pts) > 1:
-                if self.dtype == "area":
+                if self.dtype in ("area", "volume"):
                     self._say(f"مضلع: {len(self.pts)} رؤوس · ≈ {geo.poly_area(self.pts):.1f} م²")
                 else:
                     self._say(f"{len(self.pts)} نقاط · الطول ≈ {geo.length(self.pts):.2f} م")
@@ -583,7 +611,7 @@ class MapPage(QWidget):
         elif self.dtype == "line" and len(P) > 1 and self._item_geom() is not None:
             self._item_geom()["lines"].append(P)
             self.history.append(("line", self.item.currentData()))
-        elif self.dtype == "area" and len(P) > 2 and self._item_geom() is not None:
+        elif self.dtype in ("area", "volume") and len(P) > 2 and self._item_geom() is not None:
             self._item_geom()["polys"].append(P)
             self.history.append(("area", self.item.currentData()))
         self.update_totals()
@@ -684,8 +712,10 @@ class MapPage(QWidget):
                     res["items"][code] = float(len(g["points"]))
             else:
                 A = sum(geo.poly_area(P) for P in g["polys"])
-                if cur == code and self.dtype == "area" and len(self.pts) > 2:
+                if cur == code and self.dtype in ("area", "volume") and len(self.pts) > 2:
                     A += geo.poly_area(self.pts)
+                if g["unit"] == "م³":
+                    A *= float((self.store.item(code) or {}).get("depth") or 0.3)
                 if A:
                     res["items"][code] = round(A, 2)
         return res
@@ -803,8 +833,13 @@ class MapPage(QWidget):
                 cv.stroke(p, P, COLORS["line"], px=3)
                 cv.label_at(p, P, f"{nm} {geo.length(P):.1f} م", COLORS["line"])
             for P in g["polys"]:
-                cv.stroke(p, P, COLORS["area"], px=2, close=True, fill=QColor(46, 125, 50, 60))
-                cv.label_at(p, P, f"{nm} {geo.poly_area(P):.1f} م²", COLORS["area"])
+                if g["unit"] == "م³":
+                    dep = float((it or {}).get("depth") or 0.3)
+                    cv.stroke(p, P, "#8E24AA", px=2, close=True, fill=QColor(142, 36, 170, 55))
+                    cv.label_at(p, P, f"{nm} {geo.poly_area(P) * dep:.2f} م³", "#8E24AA")
+                else:
+                    cv.stroke(p, P, COLORS["area"], px=2, close=True, fill=QColor(46, 125, 50, 60))
+                    cv.label_at(p, P, f"{nm} {geo.poly_area(P):.1f} م²", COLORS["area"])
             p.setPen(QPen(QColor("#FFFFFF"), 1.5))
             p.setBrush(QColor(COLORS["point"]))
             for q in g["points"]:
@@ -818,14 +853,14 @@ class MapPage(QWidget):
             if self.dtype == "road":
                 cv.stroke(p, Q, col, width_m=w, px=2, alpha=200)
             else:
-                cv.stroke(p, Q, col, px=3, alpha=220, close=self.dtype == "area",
-                          fill=QColor(46, 125, 50, 50) if self.dtype == "area" else None)
+                cv.stroke(p, Q, col, px=3, alpha=220, close=self.dtype in ("area", "volume"),
+                          fill=QColor(46, 125, 50, 50) if self.dtype in ("area", "volume") else None)
             p.setPen(QPen(QColor("#FFFFFF"), 1.2))
             p.setBrush(QColor(col))
             for q in self.pts:
                 p.drawEllipse(cv.to_screen(*q), 4, 4)
             if len(Q) > 1:
-                val = f"{geo.poly_area(Q):.1f} م²" if self.dtype == "area" else f"{geo.length(Q):.2f} م"
+                val = (f"{geo.poly_area(Q):.1f} م²" if self.dtype in ("area", "volume") else f"{geo.length(Q):.2f} م")
                 cv.label_at(p, Q, val, col)
 
     # ---------- الصورة الجوية والطبقات

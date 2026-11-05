@@ -100,17 +100,22 @@ class MainWindow(QMainWindow):
         self.pages["prices"].changed.connect(self.pages["entry"].update_live_cost)
         self.pages["export"].data_restored.connect(self.on_restored)
         self.pages["appearance"].changed.connect(lambda: QTimer.singleShot(0, self.apply_appearance))
+        self.pages["prices"].items_changed.connect(lambda: QTimer.singleShot(0, lambda: self.rebuild("prices")))
         self.update_badge()
 
     def apply_appearance(self):
         """يطبّق الثيم ويعيد بناء الواجهة مع الحفاظ على ما أُدخل في النموذج."""
-        snap = self.pages["entry"].snapshot()
         scroll = self.pages["appearance"].scroll.verticalScrollBar().value()
         theme.apply(QApplication.instance(), self.settings)
+        self.rebuild("appearance")
+        self.pages["appearance"].scroll.verticalScrollBar().setValue(scroll)
+
+    def rebuild(self, page):
+        """إعادة بناء الصفحات (بعد تغيير المظهر أو إضافة بند) مع الحفاظ على النموذج الحالي."""
+        snap = self.pages["entry"].snapshot()
         self.build_ui()
         self.pages["entry"].restore(snap)
-        self.go("appearance")
-        self.pages["appearance"].scroll.verticalScrollBar().setValue(scroll)
+        self.go(page)
 
     def _sidebar(self):
         side = QFrame()
