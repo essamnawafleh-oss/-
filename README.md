@@ -9,8 +9,8 @@
 
 ## التنزيل والتثبيت
 
-1. افتح صفحة **Releases** في هذا المستودع.
-2. نزّل `StreetStudies-Setup-x.y.z.exe` وشغّله.
+1. نزّل آخر نسخة مباشرة: https://github.com/essamnawafleh-oss/-/releases/latest/download/StreetStudies-Setup.exe
+2. شغّل الملف.
 3. يضع المُثبّت أيقونة **«دراسات الشوارع»** على سطح المكتب وفي قائمة ابدأ (ولا يحتاج صلاحيات مدير).
 
 > عند أول تشغيل قد يظهر تحذير Windows SmartScreen لأن البرنامج غير موقّع رقمياً:
