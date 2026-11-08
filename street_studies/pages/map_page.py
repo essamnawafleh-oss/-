@@ -104,6 +104,7 @@ class MapPage(QWidget):
         self.terrain = None
         self.profile_result = None
         self.sewer_result = None
+        self.drain_result = None
         self._contours_rel = []
         self.reset_session()
 
@@ -170,8 +171,10 @@ class MapPage(QWidget):
             self._contours_rel = []
         self.profile_btn.setEnabled(bool(T))
         self.sewer_btn.setEnabled(bool(T))
+        self.drain_btn.setEnabled(bool(T))
         self._update_profile_info()
         self._update_sewer_info()
+        self._update_drain_info()
         if self.canvas:
             self.canvas.update()
 
@@ -310,7 +313,69 @@ class MapPage(QWidget):
                 cv.stroke(p, L, "#8E24AA", width_m=ln["width"], px=2, dash=True)
                 cv.label_at(p, L, f"دخلة خدمات {ln['width']:g} م — {ln['length']:.0f} م", "#8E24AA")
 
+    # ---------- تجمع الأمطار والأودية
+    def open_drainage(self):
+        if not self.terrain:
+            self._say("أرفق ملف الكنتور أولاً.", True)
+            return
+        self.commit_current()
+        if not self.roads:
+            self._say("ارسم مسار الشارع أولاً (نوع الرسم: شارع).", True)
+            return
+        from .. import drainage
+        from ..drainage_view import DrainageDialog
+        ox, oy = self.geo.ox, self.geo.oy
+        roads = [[(x + ox, y + oy) for x, y in P] for P in self.roads]
+        w = self.w.value() or 6
+
+        def run(params):
+            outs = self._outlets(roads, params["margin"])
+            wadis = [P for k, P, _ in outs if k == "wadi"]
+            streets = [P for k, P, n in outs if k == "road" and n != "الشارع المرسوم"]
+            return drainage.analyze(roads, w, self.terrain, self.profile_result, wadis, streets, **params)
+        dlg = DrainageDialog(run, self.settings.get("drain_params"), self.window())
+        dlg.apply_requested.connect(self._apply_drainage)
+        dlg.exec()
+
+    def _apply_drainage(self, res):
+        self.drain_result = res
+        self.settings["drain_params"] = dict(res["params"])
+        self.settings.save()
+        self._update_drain_info()
+        self.canvas.update()
+        self._say("تم اعتماد دراسة تجمع الأمطار والأودية — اضغط «حفظ وربط الكميات بالنموذج» لحفظها مع السجل.")
+
+    def _update_drain_info(self):
+        r = getattr(self, "drain_result", None)
+        if not r:
+            self.drain_info.setText("")
+            return
+        lanes = sum(s["lane_len"] for s in r["sags"])
+        self.drain_info.setText(f"الأمطار: {len(r['sags'])} نقطة تجمع (دخلات تصريف {lanes:.0f} م) · "
+                                f"{len(r['wadis'])} وادٍ مقترح ({sum(w['length'] for w in r['wadis']):.0f} م)")
+
+    def _draw_drainage(self, p, cv):
+        r = getattr(self, "drain_result", None)
+        if not r:
+            return
+        ox, oy = self.geo.ox, self.geo.oy
+        for wd in r["wadis"]:
+            P = _rel(wd["path"], ox, oy)
+            c = wd["channel"]
+            cv.stroke(p, P, "#0277BD", width_m=max(c["width"], 1.0), px=2.5)
+            cv.label_at(p, P, f"وادٍ مقترح {c['width']:g}×{c['depth']:g} م · Q={wd['q']:.2f}", "#01579B")
+        for n, sg in enumerate(r["sags"], 1):
+            P = _rel(sg["path"], ox, oy)
+            cv.stroke(p, P, "#00ACC1", px=2.5, dash=True)
+            q = cv.to_screen(sg["x"] - ox, sg["y"] - oy)
+            p.setPen(QPen(QColor("#FFFFFF"), 1.5))
+            p.setBrush(QColor("#0288D1"))
+            p.drawEllipse(q, 7, 7)
+            cv.label_at(p, P[:2] if len(P) > 1 else P, f"تجمع أمطار {n} → {sg['outlet']} ({sg['lane_len']:.0f} م)",
+                        "#00838F")
+
     def _draw_terrain(self, p, cv):
+        self._draw_drainage(p, cv)
         self._draw_sewer(p, cv)
         if getattr(self, "terrain", None) and self.show_contours.isChecked():
             T = self.terrain
@@ -506,6 +571,12 @@ class MapPage(QWidget):
         v.addWidget(self.sewer_btn)
         self.sewer_info = label("", "caption", wrap=True)
         v.addWidget(self.sewer_info)
+        self.drain_btn = button("تجمع الأمطار والأودية", "secondary", "mdi6.weather-pouring")
+        self.drain_btn.setToolTip("نقاط تجمع مياه الأمطار على الشارع ودخلات تصريفها، والأودية المقترحة من الكنتور")
+        self.drain_btn.clicked.connect(self.open_drainage)
+        v.addWidget(self.drain_btn)
+        self.drain_info = label("", "caption", wrap=True)
+        v.addWidget(self.drain_info)
         v.addWidget(divider())
 
         # إعدادات المسار
@@ -654,6 +725,7 @@ class MapPage(QWidget):
         self._ctx = (e.edit_index, id(e.map_path), e.name.text())
         self.profile_result = (e.map_path or {}).get("profile")
         self.sewer_result = (e.map_path or {}).get("sewer")
+        self.drain_result = (e.map_path or {}).get("drainage")
         self.load_terrain()
         name = e.name.text().strip() or "مواطن جديد"
         plan = e.plan_card.values() or {}
@@ -1057,6 +1129,7 @@ class MapPage(QWidget):
             "mode": mode, "out": not near,
             "profile": self._profile_for_save(),
             "sewer": getattr(self, "sewer_result", None),
+            "drainage": getattr(self, "drain_result", None),
         }
         self.drawing = False
         self.canvas.drawing = False
@@ -1264,6 +1337,15 @@ def render_path_image(path, store_streets=None, width=1600, height=1000):
                 p.drawEllipse(c.to_screen(q[0] - ox, q[1] - oy), 5, 5)
     def overlay_all(p, c):
         overlay(p, c)
+        dr = path.get("drainage")
+        if dr:
+            for wd in dr.get("wadis") or []:
+                c.stroke(p, _rel(wd["path"], ox, oy), "#0277BD", width_m=max(wd["channel"]["width"], 1.0), px=2.5)
+            for sg in dr.get("sags") or []:
+                c.stroke(p, _rel(sg["path"], ox, oy), "#00ACC1", px=2.5, dash=True)
+                p.setPen(QPen(QColor("#FFFFFF"), 1.5))
+                p.setBrush(QColor("#0288D1"))
+                p.drawEllipse(c.to_screen(sg["x"] - ox, sg["y"] - oy), 6, 6)
         sew = path.get("sewer")
         if sew:
             from ..sewer_view import STATUS_COLOR

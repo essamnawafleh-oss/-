@@ -153,6 +153,20 @@ def build_html(store, street, parcel_img=False, parcel_info=None, images=(), pla
                           f'عمق بداية الوصلة {par.get("start_depth", 0):g} م</p>')
             path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in HEADERS])
                           + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in row]) for row in lot_rows(sew)) + "</table>")
+        dr = pth.get("drainage")
+        if dr:
+            from .drainage_view import SAG_HEADERS, WADI_HEADERS, sag_rows, wadi_rows
+            par = dr.get("params") or {}
+            path_html += "<h2>تجمع مياه الأمطار والأودية</h2>"
+            path_html += (f'<p class="muted">C = {par.get("runoff_c", 0):g} · شدة المطر {par.get("intensity", 0):g} مم/ساعة · '
+                          f'حد المساحة للوادي {par.get("stream_ha", 0):g} هكتار · n = {par.get("manning_n", 0):g}</p>')
+            if dr.get("sags"):
+                path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in SAG_HEADERS])
+                              + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in r]) for r in sag_rows(dr)) + "</table>")
+            if dr.get("wadis"):
+                path_html += ('<p class="muted">الأودية المقترحة</p><table width="100%">'
+                              + _tr(*[f"<th>{h}</th>" for h in WADI_HEADERS])
+                              + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in r]) for r in wadi_rows(dr)) + "</table>")
         prof = pth.get("profile")
         if prof:
             from .profile_view import summary_lines

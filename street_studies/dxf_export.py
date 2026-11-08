@@ -239,6 +239,23 @@ def write_path_dxf(path, name, out_file, store_items=None):
                 wr.poly(lane_layer, lane["path"], width=lane["width"])
                 wr.label(lane_layer, lane["path"], f"دخلة خدمات {lane['width']:g} م — {lane['length']:.1f} م")
 
+    # تجمع الأمطار والأودية المقترحة
+    dr = path.get("drainage")
+    if dr:
+        l_sag = wr._layer("نقاط تجمع الأمطار", (5, "Continuous", 50))
+        l_lane = wr._layer("دخلات تصريف الأمطار", (130, "DASHED", 50))
+        l_wadi = wr._layer("أودية مقترحة", (150, "Continuous", 70))
+        for n, sg in enumerate(dr.get("sags") or [], 1):
+            msp.add_circle((sg["x"], sg["y"]), 1.5, dxfattribs={"layer": l_sag})
+            wr.label(l_sag, [(sg["x"], sg["y"])], f"تجمع أمطار {n} — منسوب {sg['z']:.2f} — Q {sg['q']:.3f} م³/ث")
+            if len(sg.get("path") or []) > 1:
+                wr.poly(l_lane, sg["path"])
+                wr.label(l_lane, sg["path"], f"دخلة تصريف إلى {sg['outlet']} — {sg['lane_len']:.0f} م")
+        for wd in dr.get("wadis") or []:
+            c = wd["channel"]
+            wr.poly(l_wadi, wd["path"], width=c["width"])
+            wr.label(l_wadi, wd["path"], f"وادٍ مقترح {c['width']:g}×{c['depth']:g} م — Q {wd['q']:.2f} م³/ث")
+
     anchor = (path.get("parcelPts") or pts or [[0, 0]])[0]
     note = msp.add_mtext(f"المواطن: {name}\\Pالقطعة: {path.get('parcel') or ''}\\P"
                          f"طول الشارع المحتسب: {path.get('bill', 0):.2f} م × {w:g} م",
