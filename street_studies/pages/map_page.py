@@ -103,6 +103,7 @@ class MapPage(QWidget):
         self.canvas = None
         self.terrain = None
         self.profile_result = None
+        self.sewer_result = None
         self._contours_rel = []
         self.reset_session()
 
@@ -168,7 +169,9 @@ class MapPage(QWidget):
             self.interval.setText("")
             self._contours_rel = []
         self.profile_btn.setEnabled(bool(T))
+        self.sewer_btn.setEnabled(bool(T))
         self._update_profile_info()
+        self._update_sewer_info()
         if self.canvas:
             self.canvas.update()
 
@@ -219,7 +222,96 @@ class MapPage(QWidget):
             return None
         return r
 
+    # ---------- الصرف الصحي
+    def _outlets(self, roads_abs, radius):
+        """مصارف محتملة لدخلات الخدمات: الشوارع المرسومة، والشوارع التنظيمية والأودية القريبة."""
+        out = [("road", P, "الشارع المرسوم") for P in roads_abs]
+        xs = [q[0] for P in roads_abs for q in P]
+        ys = [q[1] for P in roads_abs for q in P]
+        ox, oy = self.geo.ox, self.geo.oy
+        from PySide6.QtCore import QRectF
+        box = QRectF(min(xs) - ox - radius - 50, min(ys) - oy - radius - 50,
+                     max(xs) - min(xs) + 2 * radius + 100, max(ys) - min(ys) + 2 * radius + 100)
+        for ds in self.geo.datasets:
+            for i, r in enumerate(ds.bbox):
+                if ds.layers[i] in (geo.LAYER_ROAD, geo.LAYER_WADI) and r.intersects(box):
+                    kind = "road" if ds.layers[i] == geo.LAYER_ROAD else "wadi"
+                    out.append((kind, ds.abs_points(i), "شارع تنظيمي" if kind == "road" else "وادٍ"))
+        return out
+
+    def open_sewer(self):
+        if not self.terrain:
+            self._say("أرفق ملف الكنتور أولاً.", True)
+            return
+        self.commit_current()
+        if not self.roads:
+            self._say("ارسم مسار الشارع أولاً (نوع الرسم: شارع).", True)
+            return
+        from .. import sewer
+        from ..sewer_view import SewerDialog
+        ox, oy = self.geo.ox, self.geo.oy
+        roads = [[(x + ox, y + oy) for x, y in P] for P in self.roads]
+        w = self.w.value() or 6
+        lots = sewer.frontage_lots(roads, w, self.geo.datasets, ox, oy)
+        prof = self.profile_result
+
+        def run(params):
+            return sewer.analyze(roads, w, self.terrain, lots, prof, self._outlets(roads, params["search_radius"]),
+                                 **params)
+        if not prof:
+            self._say("لم يُحسب البروفايل بعد — يُستخدم منسوب الأرض لمحور الشارع بدل المنسوب التصميمي.", True)
+        dlg = SewerDialog(run, self.settings.get("sewer_params"), self.window())
+        dlg.apply_requested.connect(self._apply_sewer)
+        dlg.exec()
+
+    def _apply_sewer(self, res):
+        self.sewer_result = res
+        self.settings["sewer_params"] = {k: v for k, v in res["params"].items()}
+        self.settings.save()
+        self._update_sewer_info()
+        self.canvas.update()
+        self._say("تم اعتماد فحص الصرف الصحي — اضغط «حفظ وربط الكميات بالنموذج» لحفظه مع السجل.")
+
+    def _update_sewer_info(self):
+        from .. import sewer
+        r = getattr(self, "sewer_result", None)
+        if not r:
+            self.sewer_info.setText("")
+            return
+        c = r["counts"]
+        lanes = [x["lane"] for x in r["lots"] if x.get("lane")]
+        txt = f"الصرف: مخدومة {c[sewer.SERVED]} · بتعميق {c[sewer.DEEPEN]} · دخلات {c[sewer.LANE]}"
+        if lanes:
+            txt += f" (مجموع أطوال الدخلات {sum(x['length'] for x in lanes):.0f} م)"
+        if c[sewer.NO_OUTLET]:
+            txt += f" · بلا مصرف {c[sewer.NO_OUTLET]}"
+        self.sewer_info.setText(txt)
+
+    def _draw_sewer(self, p, cv):
+        r = getattr(self, "sewer_result", None)
+        if not r:
+            return
+        from ..sewer_view import STATUS_COLOR
+        ox, oy = self.geo.ox, self.geo.oy
+        for lot in r["lots"]:
+            col = QColor(STATUS_COLOR[lot["status"]])
+            fill = QColor(col)
+            fill.setAlpha(45)
+            P = [(x - ox, y - oy) for x, y in lot["poly"]]
+            cv.stroke(p, P + P[:1], col, px=2, close=True, fill=fill)
+            if lot.get("low"):
+                q = cv.to_screen(lot["low"][0] - ox, lot["low"][1] - oy)
+                p.setPen(QPen(QColor("#FFFFFF"), 1.2))
+                p.setBrush(col)
+                p.drawEllipse(q, 4, 4)
+            ln = lot.get("lane")
+            if ln:
+                L = [(x - ox, y - oy) for x, y in ln["path"]]
+                cv.stroke(p, L, "#8E24AA", width_m=ln["width"], px=2, dash=True)
+                cv.label_at(p, L, f"دخلة خدمات {ln['width']:g} م — {ln['length']:.0f} م", "#8E24AA")
+
     def _draw_terrain(self, p, cv):
+        self._draw_sewer(p, cv)
         if getattr(self, "terrain", None) and self.show_contours.isChecked():
             T = self.terrain
             step = T.interval or 10
@@ -408,6 +500,12 @@ class MapPage(QWidget):
         v.addWidget(self.profile_btn)
         self.profile_info = label("", "caption", wrap=True)
         v.addWidget(self.profile_info)
+        self.sewer_btn = button("فحص الصرف الصحي ودخلات الخدمات", "secondary", "mdi6.pipe")
+        self.sewer_btn.setToolTip("هل كل قطعة على الشارع مخدومة بالصرف الصحي بالجاذبية؟ وإلا تُقترح دخلة خدمات")
+        self.sewer_btn.clicked.connect(self.open_sewer)
+        v.addWidget(self.sewer_btn)
+        self.sewer_info = label("", "caption", wrap=True)
+        v.addWidget(self.sewer_info)
         v.addWidget(divider())
 
         # إعدادات المسار
@@ -555,6 +653,7 @@ class MapPage(QWidget):
         e = self.entry
         self._ctx = (e.edit_index, id(e.map_path), e.name.text())
         self.profile_result = (e.map_path or {}).get("profile")
+        self.sewer_result = (e.map_path or {}).get("sewer")
         self.load_terrain()
         name = e.name.text().strip() or "مواطن جديد"
         plan = e.plan_card.values() or {}
@@ -957,6 +1056,7 @@ class MapPage(QWidget):
             "margin": max(self.margin.value(), 0), "shared": round(ir["shared"], 1), "with": ir["with"],
             "mode": mode, "out": not near,
             "profile": self._profile_for_save(),
+            "sewer": getattr(self, "sewer_result", None),
         }
         self.drawing = False
         self.canvas.drawing = False
@@ -1117,6 +1217,9 @@ def render_path_image(path, store_streets=None, width=1600, height=1000):
     pts += [q for gg in (path.get("items") or {}).values() for P in (gg.get("lines") or []) + (gg.get("polys") or [])
             for q in P] + [q for gg in (path.get("items") or {}).values() for q in gg.get("points") or []]
     pts += path.get("parcelPts") or []
+    for lot in (path.get("sewer") or {}).get("lots") or []:
+        if lot.get("lane"):
+            pts += lot["lane"]["path"]
     if not pts:
         return None
     xs, ys = [p[0] - ox for p in pts], [p[1] - oy for p in pts]
@@ -1159,7 +1262,23 @@ def render_path_image(path, store_streets=None, width=1600, height=1000):
             p.setBrush(QColor(COLORS["point"]))
             for q in gg.get("points") or []:
                 p.drawEllipse(c.to_screen(q[0] - ox, q[1] - oy), 5, 5)
-    cv.overlay = overlay
+    def overlay_all(p, c):
+        overlay(p, c)
+        sew = path.get("sewer")
+        if sew:
+            from ..sewer_view import STATUS_COLOR
+            for lot in sew.get("lots") or []:
+                col = QColor(STATUS_COLOR[lot["status"]])
+                fill = QColor(col)
+                fill.setAlpha(45)
+                P = _rel(lot["poly"], ox, oy)
+                c.stroke(p, P + P[:1], col, px=2, close=True, fill=fill)
+                ln = lot.get("lane")
+                if ln:
+                    L = _rel(ln["path"], ox, oy)
+                    c.stroke(p, L, "#8E24AA", width_m=ln["width"], px=2, dash=True)
+                    c.label_at(p, L, f"دخلة خدمات {ln['length']:.0f} م", "#8E24AA")
+    cv.overlay = overlay_all
     img = QImage(width, height, QImage.Format.Format_ARGB32)
     img.fill(QColor("#FFFFFF"))
     cv.render(img)

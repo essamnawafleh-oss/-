@@ -143,6 +143,16 @@ def build_html(store, street, parcel_img=False, parcel_info=None, images=(), pla
         if path_img:
             path_html += '<p class="c"><img src="img://path" width="640"></p>'
         path_html += f'<table width="100%">{rows_m}</table>'
+        sew = pth.get("sewer")
+        if sew:
+            from .sewer_view import HEADERS, lot_rows
+            path_html += "<h2>الصرف الصحي ودخلات الخدمات</h2>"
+            par = sew.get("params") or {}
+            path_html += (f'<p class="muted">عمق قاع خط الشارع {par.get("sewer_depth", 0):g} م · أقصى عمق '
+                          f'{par.get("max_depth", 0):g} م · أقل ميل للوصلة {par.get("conn_slope", 0) * 100:g}% · '
+                          f'عمق بداية الوصلة {par.get("start_depth", 0):g} م</p>')
+            path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in HEADERS])
+                          + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in row]) for row in lot_rows(sew)) + "</table>")
         prof = pth.get("profile")
         if prof:
             from .profile_view import summary_lines

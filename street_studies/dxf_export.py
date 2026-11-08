@@ -217,6 +217,28 @@ def write_path_dxf(path, name, out_file, store_items=None):
         if gg.get("points"):
             wr.label(ln, [gg["points"][0]], f"{ln} — {len(gg['points'])} عدد")
 
+    # الصرف الصحي: القطع حسب حالتها ودخلات الخدمات المقترحة
+    sew = path.get("sewer")
+    if sew:
+        status_layers = {"served": ("قطع مخدومة بالصرف", (3, "Continuous", 35)),
+                         "deepen": ("قطع تحتاج تعميق خط الصرف", (40, "Continuous", 35)),
+                         "lane": ("قطع تحتاج دخلة خدمات", (12, "Continuous", 50)),
+                         "no_outlet": ("قطع بلا مصرف قريب", (200, "Continuous", 50))}
+        lane_layer = wr._layer("دخلة خدمات", (6, "DASHED", 50))
+        for lot in sew.get("lots") or []:
+            if lot["status"] not in status_layers:
+                continue
+            name_l, style = status_layers[lot["status"]]
+            ln = wr._layer(name_l, style)
+            wr.poly(ln, lot["poly"], close=True)
+            cx = sum(q[0] for q in lot["poly"]) / len(lot["poly"])
+            cy = sum(q[1] for q in lot["poly"]) / len(lot["poly"])
+            wr.label(ln, [(cx, cy)], f"{lot['num']} — {name_l}")
+            lane = lot.get("lane")
+            if lane:
+                wr.poly(lane_layer, lane["path"], width=lane["width"])
+                wr.label(lane_layer, lane["path"], f"دخلة خدمات {lane['width']:g} م — {lane['length']:.1f} م")
+
     anchor = (path.get("parcelPts") or pts or [[0, 0]])[0]
     note = msp.add_mtext(f"المواطن: {name}\\Pالقطعة: {path.get('parcel') or ''}\\P"
                          f"طول الشارع المحتسب: {path.get('bill', 0):.2f} م × {w:g} م",

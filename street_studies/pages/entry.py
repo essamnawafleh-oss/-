@@ -781,6 +781,10 @@ class EntryPage(QWidget):
             parts.append(f"{it['name'] if it else code} {q:g} {it['unit'] if it else ''}")
         if (p.get("shared") or 0) > .5:
             parts.append(f"مشترك {p['shared']} م مع " + "، ".join(x["n"] for x in p.get("with") or []))
+        if p.get("sewer"):
+            c = p["sewer"]["counts"]
+            parts.append(f"صرف صحي: مخدومة {c['served']} · بتعميق {c['deepen']} · دخلات {c['lane']}"
+                         + (f" · بلا مصرف {c['no_outlet']}" if c.get("no_outlet") else ""))
         if p.get("profile"):
             pr = p["profile"]
             bad = sum(d["design_over"] + d["cf_over"] for d in pr["roads"])
