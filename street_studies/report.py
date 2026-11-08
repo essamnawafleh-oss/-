@@ -153,6 +153,19 @@ def build_html(store, street, parcel_img=False, parcel_info=None, images=(), pla
                           f'عمق بداية الوصلة {par.get("start_depth", 0):g} م</p>')
             path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in HEADERS])
                           + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in row]) for row in lot_rows(sew)) + "</table>")
+        sd = pth.get("subdivision")
+        if sd:
+            from .subdivision_view import HEADERS as SD_HEADERS, internal_lines, lot_rows as sd_rows
+            par = sd.get("params") or {}
+            path_html += "<h2>الإفراز</h2>"
+            path_html += (f'<p class="muted">{"اقتراح تلقائي" if sd.get("mode") == "auto" else "فحص قطع مرسومة"} · '
+                          f'أقل مساحة {par.get("min_area", 0):g} م² · أقل واجهة {par.get("min_frontage", 0):g} م · '
+                          f'{len(sd["lots"])} قطعة، مطابقة {sd.get("ok", 0)}'
+                          + (f' · شوارع داخلية {sd.get("roads_area", 0):,.0f} م²' if sd.get("roads") else "") + "</p>")
+            for line_ in internal_lines(sd):
+                path_html += f'<p class="muted">{_esc(line_)}</p>'
+            path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in SD_HEADERS])
+                          + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in r]) for r in sd_rows(sd)) + "</table>")
         dr = pth.get("drainage")
         if dr:
             from .drainage_view import SAG_HEADERS, WADI_HEADERS, sag_rows, wadi_rows

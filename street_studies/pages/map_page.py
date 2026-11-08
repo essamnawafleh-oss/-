@@ -15,7 +15,8 @@ from ..theme import C, S1, S2, S3, S4
 from ..widgets import NumberEdit, button, divider, label, repolish
 
 DTYPES = [("road", "شارع", "طول الشارع"), ("line", "خط", "م.ط"), ("point", "نقاط", "عدد"),
-          ("area", "مساحة", "م²"), ("volume", "حجم", "م³"), ("wallR", "دبش", "جدار"), ("wallC", "مسلح", "جدار")]
+          ("area", "مساحة", "م²"), ("volume", "حجم", "م³"), ("wallR", "دبش", "جدار"), ("wallC", "مسلح", "جدار"),
+          ("lot", "إفراز", "قطعة")]
 UNIT_OF = {"line": "م.ط", "point": "عدد", "area": "م²", "volume": "م³"}
 # بنود لا تُرسم (تُحسب تلقائياً أو دهانات)
 NOT_DRAWN = {"RD-001", "RD-008", "RD-009", "RD-005", "RD-006"}
@@ -105,6 +106,7 @@ class MapPage(QWidget):
         self.profile_result = None
         self.sewer_result = None
         self.drain_result = None
+        self.subdiv_result = None
         self._contours_rel = []
         self.reset_session()
 
@@ -175,6 +177,7 @@ class MapPage(QWidget):
         self._update_profile_info()
         self._update_sewer_info()
         self._update_drain_info()
+        self._update_subdiv_info()
         if self.canvas:
             self.canvas.update()
 
@@ -374,7 +377,92 @@ class MapPage(QWidget):
             cv.label_at(p, P[:2] if len(P) > 1 else P, f"تجمع أمطار {n} → {sg['outlet']} ({sg['lane_len']:.0f} م)",
                         "#00838F")
 
+    # ---------- الإفراز
+    def open_subdivision(self):
+        self.commit_current()
+        if self.sel is None:
+            self._say("حدّد القطعة المراد إفرازها أولاً.", True)
+            return
+        if not self.roads:
+            self._say("ارسم الشارع الذي تطل عليه القطعة أولاً (نوع الرسم: شارع).", True)
+            return
+        from .. import subdivision
+        from ..subdivision_view import SubdivisionDialog
+        ox, oy = self.geo.ox, self.geo.oy
+        ds, i = self.sel
+        parcel = ds.abs_points(i)
+        roads = [[(x + ox, y + oy) for x, y in P] for P in self.roads]
+        cx, cy = sum(p[0] for p in parcel) / len(parcel), sum(p[1] for p in parcel) / len(parcel)
+        road = min(roads, key=lambda P: subdivision._dist_line(P, cx, cy))
+        w = self.w.value() or 6
+        drawn = [[(x + ox, y + oy) for x, y in P] for P in self.lots_drawn]
+        zoning = (self.entry.plan_card.values() or {}).get("zoning") or {}
+        params = dict(self.settings.get("subdiv_params") or {})
+        for key, zkey in (("min_area", "minLot"), ("min_frontage", "frontage")):
+            try:
+                if zoning.get(zkey):
+                    params[key] = float(str(zoning[zkey]).rstrip("%"))
+            except ValueError:
+                pass
+
+        def run(mode, prm):
+            if mode == "auto":
+                prop = subdivision.propose(parcel, road, w, **prm)
+                lots, ints, polys = prop["lots"], prop["roads"], prop["road_polys"]
+            else:
+                lots, ints, polys = drawn, [], []
+            res = subdivision.check(lots, (roads, ints), w, prm["road_width"], self.terrain, **prm)
+            res.update(mode=mode, roads=[[[round(x, 2), round(y, 2)] for x, y in P] for P in ints],
+                       road_polys=[[[round(x, 2), round(y, 2)] for x, y in P] for P in polys],
+                       roads_area=round(sum(subdivision._area(P) for P in polys), 1), parcel=ds.nums[i])
+            res.pop("sewer", None)
+            return res
+        dlg = SubdivisionDialog(run, bool(drawn), params, self.window())
+        dlg.apply_requested.connect(self._apply_subdivision)
+        dlg.exec()
+
+    def _apply_subdivision(self, res):
+        self.subdiv_result = res
+        self.settings["subdiv_params"] = {k: res["params"][k] for k in ("road_width", "front_depth", "internal_road")}
+        self.settings.save()
+        self._update_subdiv_info()
+        self.canvas.update()
+        self._say("تم اعتماد الإفراز — اضغط «حفظ وربط الكميات بالنموذج» لحفظه مع السجل.")
+
+    def _update_subdiv_info(self):
+        r = getattr(self, "subdiv_result", None)
+        if not r:
+            self.subdiv_info.setText("")
+            return
+        n = len(r["lots"])
+        self.subdiv_info.setText(f"الإفراز: {n} قطعة · مطابقة {r['ok']}" + (f" · مخالفة {n - r['ok']}" if r["ok"] < n else "")
+                                 + (f" · شوارع داخلية {len(r['roads'])}" if r.get("roads") else ""))
+
+    def _draw_subdivision(self, p, cv):
+        ox, oy = self.geo.ox, self.geo.oy
+        for P in self.lots_drawn:
+            cv.stroke(p, P + P[:1], "#00897B", px=2, dash=True, close=True)
+        r = getattr(self, "subdiv_result", None)
+        if not r:
+            return
+        rw = r["params"].get("road_width", 8)
+        for P in r.get("roads") or []:
+            cv.stroke(p, _rel(P, ox, oy), "#F57C00", width_m=rw, px=1.5, alpha=160)
+        for lot in r["lots"]:
+            P = _rel(lot["poly"], ox, oy)
+            col = "#2E7D32" if not lot["reasons"] else "#C62828"
+            fill = QColor(col)
+            fill.setAlpha(40)
+            cv.stroke(p, P + P[:1], col, px=1.8, close=True, fill=fill)
+            if cv.s > 0.5:
+                c = cv.to_screen(sum(q[0] for q in P) / len(P), sum(q[1] for q in P) / len(P))
+                p.setPen(QColor(col))
+                from PySide6.QtCore import QRectF
+                p.drawText(QRectF(c.x() - 40, c.y() - 16, 80, 32), Qt.AlignmentFlag.AlignCenter,
+                           f"{lot['n']}\n{lot['area']:.0f} م²")
+
     def _draw_terrain(self, p, cv):
+        self._draw_subdivision(p, cv)
         self._draw_drainage(p, cv)
         self._draw_sewer(p, cv)
         if getattr(self, "terrain", None) and self.show_contours.isChecked():
@@ -399,6 +487,7 @@ class MapPage(QWidget):
 
     def reset_session(self):
         self.roads, self.wallsR, self.wallsC = [], [], []
+        self.lots_drawn = []
         self.items = {}
         self.pts = []
         self.drawing = False
@@ -577,6 +666,12 @@ class MapPage(QWidget):
         v.addWidget(self.drain_btn)
         self.drain_info = label("", "caption", wrap=True)
         v.addWidget(self.drain_info)
+        self.subdiv_btn = button("الإفراز", "secondary", "mdi6.view-grid-plus-outline")
+        self.subdiv_btn.setToolTip("اقتراح إفراز تلقائي للقطعة المحددة أو فحص قطع مرسومة بأداة «إفراز»")
+        self.subdiv_btn.clicked.connect(self.open_subdivision)
+        v.addWidget(self.subdiv_btn)
+        self.subdiv_info = label("", "caption", wrap=True)
+        v.addWidget(self.subdiv_info)
         v.addWidget(divider())
 
         # إعدادات المسار
@@ -726,6 +821,7 @@ class MapPage(QWidget):
         self.profile_result = (e.map_path or {}).get("profile")
         self.sewer_result = (e.map_path or {}).get("sewer")
         self.drain_result = (e.map_path or {}).get("drainage")
+        self.subdiv_result = (e.map_path or {}).get("subdivision")
         self.load_terrain()
         name = e.name.text().strip() or "مواطن جديد"
         plan = e.plan_card.values() or {}
@@ -736,6 +832,7 @@ class MapPage(QWidget):
         if path:
             self.roads = [_rel(P, ox, oy) for P in path.get("roads") or []]
             self.wallsR = [_rel(P, ox, oy) for P in path.get("wallsR") or []]
+            self.lots_drawn = [_rel(P, ox, oy) for P in path.get("lotsDrawn") or []]
             self.wallsC = [_rel(P, ox, oy) for P in path.get("wallsC") or []]
             for c, g in (path.get("items") or {}).items():
                 self.items[c] = {"unit": g.get("unit"), "lines": [_rel(P, ox, oy) for P in g.get("lines") or []],
@@ -882,7 +979,8 @@ class MapPage(QWidget):
                 "point": "انقر لإضافة نقاط (كل نقطة = 1).",
                 "area": "مضلع: انقر الرؤوس، الزر الأيمن يُغلق المضلع.",
                 "wallR": "جدار دبش وباطون: انقر النقاط، الزر الأيمن للتثبيت.",
-                "wallC": "جدار مسلح: انقر النقاط، الزر الأيمن للتثبيت."}[self.dtype] + \
+                "wallC": "جدار مسلح: انقر النقاط، الزر الأيمن للتثبيت.",
+                "lot": "قطعة مفروزة: انقر رؤوس القطعة، الزر الأيمن يُغلقها."}[self.dtype] + \
             "  Esc إلغاء الخط الحالي · Backspace تراجع."
 
     def toggle_draw(self):
@@ -938,6 +1036,9 @@ class MapPage(QWidget):
         if self.dtype == "road" and len(P) > 1:
             self.roads.append(P)
             self.history.append(("road", None))
+        elif self.dtype == "lot" and len(P) > 2:
+            self.lots_drawn.append(P)
+            self.history.append(("lot", None))
         elif self.dtype in ("wallR", "wallC") and len(P) > 1:
             getattr(self, "walls" + self.dtype[-1]).append(P)
             self.history.append((self.dtype, None))
@@ -962,6 +1063,8 @@ class MapPage(QWidget):
             kind, code = self.history.pop()
             if kind == "road" and self.roads:
                 self.roads.pop()
+            elif kind == "lot" and self.lots_drawn:
+                self.lots_drawn.pop()
             elif kind in ("wallR", "wallC") and getattr(self, "walls" + kind[-1]):
                 getattr(self, "walls" + kind[-1]).pop()
             elif code in self.items:
@@ -1089,7 +1192,7 @@ class MapPage(QWidget):
         if not self.ensure_loaded():
             return
         self.commit_current()
-        has = self.roads or self.wallsR or self.wallsC or any(
+        has = self.roads or self.wallsR or self.wallsC or self.lots_drawn or getattr(self, "subdiv_result", None) or any(
             g["lines"] or g["points"] or g["polys"] for g in self.items.values())
         if not has:
             self._say("ارسم مساراً أو جداراً أو بنداً أولاً.", True)
@@ -1130,6 +1233,8 @@ class MapPage(QWidget):
             "profile": self._profile_for_save(),
             "sewer": getattr(self, "sewer_result", None),
             "drainage": getattr(self, "drain_result", None),
+            "lotsDrawn": [_abs(P, ox, oy) for P in self.lots_drawn],
+            "subdivision": getattr(self, "subdiv_result", None),
         }
         self.drawing = False
         self.canvas.drawing = False
@@ -1293,6 +1398,8 @@ def render_path_image(path, store_streets=None, width=1600, height=1000):
     for lot in (path.get("sewer") or {}).get("lots") or []:
         if lot.get("lane"):
             pts += lot["lane"]["path"]
+    for lot in (path.get("subdivision") or {}).get("lots") or []:
+        pts += lot["poly"]
     if not pts:
         return None
     xs, ys = [p[0] - ox for p in pts], [p[1] - oy for p in pts]
@@ -1337,6 +1444,17 @@ def render_path_image(path, store_streets=None, width=1600, height=1000):
                 p.drawEllipse(c.to_screen(q[0] - ox, q[1] - oy), 5, 5)
     def overlay_all(p, c):
         overlay(p, c)
+        sd = path.get("subdivision")
+        if sd:
+            rw = (sd.get("params") or {}).get("road_width", 8)
+            for P in sd.get("roads") or []:
+                c.stroke(p, _rel(P, ox, oy), "#F57C00", width_m=rw, px=1.5, alpha=160)
+            for lot in sd.get("lots") or []:
+                col = "#2E7D32" if not lot["reasons"] else "#C62828"
+                fill = QColor(col)
+                fill.setAlpha(40)
+                P = _rel(lot["poly"], ox, oy)
+                c.stroke(p, P + P[:1], col, px=1.8, close=True, fill=fill)
         dr = path.get("drainage")
         if dr:
             for wd in dr.get("wadis") or []:

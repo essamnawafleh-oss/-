@@ -256,6 +256,26 @@ def write_path_dxf(path, name, out_file, store_items=None):
             wr.poly(l_wadi, wd["path"], width=c["width"])
             wr.label(l_wadi, wd["path"], f"وادٍ مقترح {c['width']:g}×{c['depth']:g} م — Q {wd['q']:.2f} م³/ث")
 
+    # الإفراز: القطع والشوارع الداخلية
+    sd = path.get("subdivision")
+    if sd:
+        l_ok = wr._layer("قطع مفروزة", (3, "Continuous", 35))
+        l_bad = wr._layer("قطع مفروزة مخالفة", (12, "Continuous", 50))
+        l_int = wr._layer("شوارع داخلية", (30, "Continuous", 30))
+        rw = (sd.get("params") or {}).get("road_width", 8)
+        for P in sd.get("roads") or []:
+            wr.poly(l_int, P, width=rw)
+            wr.label(l_int, P, f"شارع داخلي {rw:g} م")
+        for lot in sd.get("lots") or []:
+            ln = l_ok if not lot["reasons"] else l_bad
+            wr.poly(ln, lot["poly"], close=True)
+            cx = sum(q[0] for q in lot["poly"]) / len(lot["poly"])
+            cy = sum(q[1] for q in lot["poly"]) / len(lot["poly"])
+            txt = f"{lot['n']} — {lot['area']:.0f} م² — واجهة {lot['frontage']:.1f} م"
+            if lot["reasons"]:
+                txt += " — " + "، ".join(lot["reasons"])
+            wr.label(ln, [(cx, cy)], txt, 1.0)
+
     anchor = (path.get("parcelPts") or pts or [[0, 0]])[0]
     note = msp.add_mtext(f"المواطن: {name}\\Pالقطعة: {path.get('parcel') or ''}\\P"
                          f"طول الشارع المحتسب: {path.get('bill', 0):.2f} م × {w:g} م",

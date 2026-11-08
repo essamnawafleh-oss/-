@@ -785,6 +785,9 @@ class EntryPage(QWidget):
             c = p["sewer"]["counts"]
             parts.append(f"صرف صحي: مخدومة {c['served']} · بتعميق {c['deepen']} · دخلات {c['lane']}"
                          + (f" · بلا مصرف {c['no_outlet']}" if c.get("no_outlet") else ""))
+        if p.get("subdivision"):
+            sd = p["subdivision"]
+            parts.append(f"إفراز: {len(sd['lots'])} قطعة، مطابقة {sd.get('ok', 0)}")
         if p.get("drainage"):
             dr = p["drainage"]
             parts.append(f"أمطار: {len(dr['sags'])} نقطة تجمع · {len(dr['wadis'])} وادٍ مقترح")
