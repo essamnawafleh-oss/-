@@ -18,6 +18,7 @@ a = Analysis(["run.py"], datas=datas, hiddenimports=hiddenimports, excludes=excl
              noarchive=False)
 pyz = PYZ(a.pure)
 
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="StreetStudies", console=False,
+# upx=False: الضغط بـ UPX يرفع احتمال الاشتباه الخاطئ من برامج الحماية
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="StreetStudies", console=False, upx=False,
           icon="street_studies/assets/app.ico", version="version_info.txt")
-coll = COLLECT(exe, a.binaries, a.datas, name="StreetStudies")
+coll = COLLECT(exe, a.binaries, a.datas, name="StreetStudies", upx=False)

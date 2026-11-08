@@ -18,6 +18,17 @@
 
 يوجد أيضاً `StreetStudies-Portable-x.y.z.zip` للتشغيل بدون تثبيت (فك الضغط وشغّل `StreetStudies.exe`).
 
+## إذا حذف برنامج الحماية (Antivirus) ملفات البرنامج
+
+هذا «اشتباه خاطئ» شائع مع البرامج المبنية بـ Python/PyInstaller وغير الموقّعة رقمياً. البناء يقلّل ذلك (مُشغّل مبني من
+المصدر، بدون ضغط UPX، ومعلومات إصدار كاملة، وفحص Windows Defender مع كل إصدار)، لكن الحل النهائي هو **التوقيع الرقمي**.
+إلى ذلك الحين:
+1. أعد الملف من «العزل/Quarantine» في برنامج الحماية واختر «السماح» (Allow).
+2. أضف مجلد التثبيت كاستثناء: `%LOCALAPPDATA%\Programs\StreetStudies` (وفي Windows Defender: الأمان ← الحماية من
+   الفيروسات ← إدارة الإعدادات ← الاستثناءات).
+3. أبلغ عن الاشتباه الخاطئ ليُزال لكل المستخدمين: Microsoft على https://www.microsoft.com/en-us/wdsi/filesubmission
+   (اختر Software developer)، أو صفحة الإبلاغ في برنامج الحماية الذي تستخدمه.
+
 ## أين تُحفظ البيانات؟
 
 في `%APPDATA%\StreetStudies` (ملف `data.json`، إعدادات المظهر `settings.json`، ومجلد `attachments` للصور والمرفقات وملفات القطع).
