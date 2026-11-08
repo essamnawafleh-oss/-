@@ -162,6 +162,8 @@ class EntryPage(QWidget):
         self.attachments = []
         self.parcel = None
         self.map_path = None
+        self.contours = None          # ملف الكنتور (DXF) المرفق للمعاملة
+        self.contour_interval = None
         self._dup_ok = False   # المستخدم اختار «سجل جديد» رغم وجود سجل مشابه
         self.manual = set()
         self.qty = {}
@@ -673,6 +675,8 @@ class EntryPage(QWidget):
         self.set_parcel(None)
         self.plan_card.clear()
         self.map_path = None
+        self.contours = None
+        self.contour_interval = None
         self._dup_ok = False
         self.path_changed.emit()
         self.fill_regions()
@@ -695,6 +699,8 @@ class EntryPage(QWidget):
             "sitePlan": copy.deepcopy(self.plan_card.attachment),
             "plan": self.plan_card.values(),
             "path": copy.deepcopy(self.map_path),
+            "contours": copy.deepcopy(self.contours),
+            "contourInterval": self.contour_interval,
         }
 
     def snapshot(self):
@@ -775,6 +781,10 @@ class EntryPage(QWidget):
             parts.append(f"{it['name'] if it else code} {q:g} {it['unit'] if it else ''}")
         if (p.get("shared") or 0) > .5:
             parts.append(f"مشترك {p['shared']} م مع " + "، ".join(x["n"] for x in p.get("with") or []))
+        if p.get("profile"):
+            pr = p["profile"]
+            bad = sum(d["design_over"] + d["cf_over"] for d in pr["roads"])
+            parts.append(f"بروفايل: حفر {pr['cut']:.0f} م³ · ردم {pr['fill']:.0f} م³" + (f" ⚠ {bad} مخالفة" if bad else " ✓"))
         txt = "مرتبط بالمخطط: " + " · ".join(parts)
         if p.get("out"):
             txt += "  ⚠ الشارع بعيد عن حدود القطعة"
@@ -788,6 +798,12 @@ class EntryPage(QWidget):
             self.length.set_value(path.get("bill"), 2)
         if path.get("parcel") and not self.piece.text().strip():
             self.piece.setText(path["parcel"])
+        prof = path.get("profile")
+        if prof:   # الحفر والردم من البروفايل الطولي
+            for code, key in (("RD-002", "cut"), ("RD-003", "fill")):
+                e = self.qty.get(code)
+                if e is not None and prof.get(key):
+                    e.set_value(round(prof[key], 2), 2)
         for code, q in (path.get("itemQty") or {}).items():
             e = self.qty.get(code)
             if e is not None:
@@ -899,6 +915,8 @@ class EntryPage(QWidget):
         self.set_parcel(copy.deepcopy(s.get("parcel")))
         self.plan_card.set_plan(copy.deepcopy(s.get("sitePlan")), copy.deepcopy(s.get("plan")))
         self.map_path = copy.deepcopy(s.get("path"))
+        self.contours = copy.deepcopy(s.get("contours"))
+        self.contour_interval = s.get("contourInterval")
         self.path_changed.emit()
         self.length.blockSignals(True)
         self.width.blockSignals(True)

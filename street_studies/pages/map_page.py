@@ -101,6 +101,9 @@ class MapPage(QWidget):
         self.store, self.settings, self.entry = store, settings, entry
         self.geo = None
         self.canvas = None
+        self.terrain = None
+        self.profile_result = None
+        self._contours_rel = []
         self.reset_session()
 
         root = QHBoxLayout(self)
@@ -116,6 +119,127 @@ class MapPage(QWidget):
         root.addWidget(holder, 1)
 
     # ---------- الحالة
+    # ---------- الكنتور والبروفايل
+    def pick_contours(self):
+        path, _ = QFileDialog.getOpenFileName(self, "اختر ملف الكنتور", "", "DXF (*.dxf)")
+        if not path:
+            return
+        from PySide6.QtWidgets import QApplication
+        from .. import terrain
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            terrain.load_dxf(path)   # تحقق قبل الإرفاق
+            att = self.store.add_attachment(path)
+        except Exception as e:  # noqa: BLE001
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self.window(), "تعذّر قراءة الكنتور", str(e))
+            return
+        QApplication.restoreOverrideCursor()
+        self.set_contours(att)
+
+    def set_contours(self, att):
+        self.entry.contours = att
+        if att is None:
+            self.entry.contour_interval = None
+        self.profile_result = None
+        self.load_terrain()
+
+    def load_terrain(self):
+        """تحميل نموذج الأرض من كنتور المعاملة الحالية."""
+        from .. import terrain
+        att = getattr(self.entry, "contours", None)
+        self.terrain = None
+        if att:
+            try:
+                self.terrain = terrain.load_dxf(self.store.attachment_path(att),
+                                                getattr(self.entry, "contour_interval", None))
+            except Exception as e:  # noqa: BLE001
+                self.contour_info.setText(f"تعذّر قراءة الكنتور: {e}")
+        T = self.terrain
+        self.contour_rm.setVisible(bool(att))
+        if T:
+            self.contour_info.setText(f"{att['name']} — المناسيب {T.zmin:g} إلى {T.zmax:g} م · "
+                                      f"{len(T.contours)} خط · الفاصل المكتشف {T.detected_interval or '—'} م")
+            self.interval.set_value(T.interval)
+            ox, oy = (self.geo.ox, self.geo.oy) if self.geo else (0, 0)
+            self._contours_rel = [(z, [(x - ox, y - oy) for x, y in P]) for z, P in T.contours]
+        elif not att:
+            self.contour_info.setText("لا يوجد كنتور مرفق لهذه المعاملة.")
+            self.interval.setText("")
+            self._contours_rel = []
+        self.profile_btn.setEnabled(bool(T))
+        self._update_profile_info()
+        if self.canvas:
+            self.canvas.update()
+
+    def _interval_changed(self):
+        v = self.interval.value()
+        if self.terrain and v > 0:
+            self.terrain.interval = v
+            self.entry.contour_interval = v
+            self.canvas.update()
+
+    def open_profile(self):
+        if not self.terrain:
+            self._say("أرفق ملف الكنتور أولاً.", True)
+            return
+        self.commit_current()
+        if not self.roads:
+            self._say("ارسم مسار الشارع أولاً (نوع الرسم: شارع).", True)
+            return
+        from ..profile_view import ProfileDialog
+        ox, oy = self.geo.ox, self.geo.oy
+        roads = [[(x + ox, y + oy) for x, y in P] for P in self.roads]
+        params = (self.profile_result or {}).get("params") or self.settings.get("profile_params") or {}
+        dlg = ProfileDialog(roads, self.w.value() or 6, self.terrain, params, self.window())
+        dlg.apply_requested.connect(self._apply_profile)
+        dlg.exec()
+
+    def _apply_profile(self, result):
+        self.profile_result = dict(result, params=dict(result["roads"][0]["params"]) if result["roads"] else {})
+        self.settings["profile_params"] = {k: v for k, v in self.profile_result["params"].items() if k != "width"}
+        self.settings.save()
+        self._update_profile_info()
+        self.canvas.update()
+        self._say(f"تم حساب البروفايل: حفر {result['cut']:.1f} م³ · ردم {result['fill']:.1f} م³ — "
+                  "اضغط «حفظ وربط الكميات بالنموذج» لنقلها.")
+
+    def _update_profile_info(self):
+        r = getattr(self, "profile_result", None)
+        if not r:
+            self.profile_info.setText("")
+            return
+        bad = sum(d["design_over"] + d["cf_over"] for d in r["roads"])
+        self.profile_info.setText(f"البروفايل: حفر {r['cut']:.1f} م³ · ردم {r['fill']:.1f} م³"
+                                  + (f" · ⚠ {bad} مخالفة" if bad else " · يحقق الشرطين ✓"))
+
+    def _profile_for_save(self):
+        r = getattr(self, "profile_result", None)
+        if not r:
+            return None
+        return r
+
+    def _draw_terrain(self, p, cv):
+        if getattr(self, "terrain", None) and self.show_contours.isChecked():
+            T = self.terrain
+            step = T.interval or 10
+            for z, P in self._contours_rel:
+                major = abs((z / (step * 5)) - round(z / (step * 5))) < 1e-6
+                cv.stroke(p, P, "#8D6E63", px=1.8 if major else 0.9, alpha=200 if major else 140)
+                if (major and cv.s > 0.6) or cv.s > 2.5:
+                    cv.label_at(p, P[len(P) // 2:len(P) // 2 + 2], f"{z:g}", "#6D4C41")
+        # المقاطع التي يتجاوز ميل أرضها الحد (من آخر بروفايل)
+        r = getattr(self, "profile_result", None)
+        if r:
+            ox, oy = self.geo.ox, self.geo.oy
+            for d in r["roads"]:
+                g = d["params"]["max_grade"]
+                st = d["stations"]
+                for a, b in zip(st, st[1:]):
+                    ds = b["s"] - a["s"]
+                    if ds > 0 and abs(b["zc"] - a["zc"]) / ds > g + 0.005:
+                        cv.stroke(p, [(a["x"] - ox, a["y"] - oy), (b["x"] - ox, b["y"] - oy)], "#D32F2F", px=5)
+
     def reset_session(self):
         self.roads, self.wallsR, self.wallsC = [], [], []
         self.items = {}
@@ -248,6 +372,42 @@ class MapPage(QWidget):
         imp.addWidget(bi)
         imp.addStretch(1)
         v.addLayout(imp)
+        v.addWidget(divider())
+
+        # الكنتور (المناسيب)
+        v.addWidget(label("الكنتور والمناسيب", "fieldLabel"))
+        self.contour_info = label("لا يوجد كنتور مرفق لهذه المعاملة.", "caption", wrap=True)
+        v.addWidget(self.contour_info)
+        cr = QHBoxLayout()
+        cr.setSpacing(S2)
+        bc = button("إرفاق كنتور DXF", "secondary", "mdi6.terrain")
+        bc.setToolTip("ملف كنتور مقصوص حول القطعة والشارع (خطوط ثلاثية الأبعاد بمناسيب Z)، بأي فاصل")
+        bc.clicked.connect(self.pick_contours)
+        self.contour_rm = button("", "ghost", "mdi6.close")
+        self.contour_rm.setToolTip("إزالة الكنتور")
+        self.contour_rm.clicked.connect(lambda: self.set_contours(None))
+        cr.addWidget(bc)
+        cr.addWidget(self.contour_rm)
+        cr.addStretch(1)
+        v.addLayout(cr)
+        ir = QHBoxLayout()
+        ir.addWidget(label("فاصل الكنتور (م)", "caption"))
+        self.interval = NumberEdit("تلقائي")
+        self.interval.setMaximumWidth(90)
+        self.interval.editingFinished.connect(self._interval_changed)
+        ir.addWidget(self.interval)
+        self.show_contours = QCheckBox("إظهار")
+        self.show_contours.setChecked(True)
+        self.show_contours.toggled.connect(lambda _: self.canvas.update() if self.canvas else None)
+        ir.addWidget(self.show_contours)
+        ir.addStretch(1)
+        v.addLayout(ir)
+        self.profile_btn = button("البروفايل الطولي للشارع", None, "mdi6.chart-line")
+        self.profile_btn.setToolTip("ميل كل مقطع، المنسوب التصميمي (ميل ≤ 19% وقطع/ردم ≤ 4 م على الواجهة)، والحفر والردم")
+        self.profile_btn.clicked.connect(self.open_profile)
+        v.addWidget(self.profile_btn)
+        self.profile_info = label("", "caption", wrap=True)
+        v.addWidget(self.profile_info)
         v.addWidget(divider())
 
         # إعدادات المسار
@@ -394,6 +554,8 @@ class MapPage(QWidget):
         self.reset_session()
         e = self.entry
         self._ctx = (e.edit_index, id(e.map_path), e.name.text())
+        self.profile_result = (e.map_path or {}).get("profile")
+        self.load_terrain()
         name = e.name.text().strip() or "مواطن جديد"
         plan = e.plan_card.values() or {}
         self.citizen.setText(f"المواطن: <b>{name}</b>" + (f" · قطعة {e.piece.text()}" if e.piece.text() else "")
@@ -794,6 +956,7 @@ class MapPage(QWidget):
             "parcelArea": round(ds.area(i), 2), "dataset": ds.name,
             "margin": max(self.margin.value(), 0), "shared": round(ir["shared"], 1), "with": ir["with"],
             "mode": mode, "out": not near,
+            "profile": self._profile_for_save(),
         }
         self.drawing = False
         self.canvas.drawing = False
@@ -846,6 +1009,7 @@ class MapPage(QWidget):
                 p.drawEllipse(cv.to_screen(*q), 5, 5)
             if g["points"]:
                 cv.label_at(p, g["points"][:1], f"{nm} ×{len(g['points'])}", COLORS["point"])
+        self._draw_terrain(p, cv)
         # الخط الجاري رسمه
         if self.pts:
             col = COLORS.get(self.dtype, COLORS["road"])

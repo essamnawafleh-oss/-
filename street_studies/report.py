@@ -49,7 +49,8 @@ def _row(label, value):
     return _tr(f'<td class="k">{_esc(label)}</td>', f"<td>{value}</td>")
 
 
-def build_html(store, street, parcel_img=False, parcel_info=None, images=(), plan_img=False, path_img=False):
+def build_html(store, street, parcel_img=False, parcel_info=None, images=(), plan_img=False, path_img=False,
+               profile_imgs=0):
     s = street
     L, W = s.get("length") or 0, s.get("width") or 0
     total = store.street_cost(s)
@@ -142,6 +143,18 @@ def build_html(store, street, parcel_img=False, parcel_info=None, images=(), pla
         if path_img:
             path_html += '<p class="c"><img src="img://path" width="640"></p>'
         path_html += f'<table width="100%">{rows_m}</table>'
+        prof = pth.get("profile")
+        if prof:
+            from .profile_view import summary_lines
+            path_html += "<h2>البروفايل الطولي للشارع</h2>"
+            for n, d in enumerate(prof.get("roads") or []):
+                if n < profile_imgs:
+                    path_html += f'<p class="c"><img src="img://prof{n}" width="660"></p>'
+                if d.get("alignment_impossible"):
+                    path_html += (f'<p class="muted">⚠ الخط {n + 1}: فرق المنسوب يحتاج طولاً لا يقل عن '
+                                  f'{d["min_length_needed"]:g} م لتحقيق حد الميل — يلزم تعديل المسار.</p>')
+                path_html += '<table width="100%">' + "".join(
+                    _tr(f'<td>{_esc(x)}</td>') for x in summary_lines(d)) + "</table>"
 
     parcel = ""
     if s.get("parcel"):
@@ -246,6 +259,14 @@ def write_pdf(store, street, path):
         except Exception:  # noqa: BLE001
             pass
 
+    profile_imgs = 0
+    prof = (street.get("path") or {}).get("profile")
+    if prof:
+        from .profile_view import render_image
+        for n, d in enumerate(prof.get("roads") or []):
+            doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl(f"img://prof{n}"), render_image(d))
+            profile_imgs += 1
+
     images = []
     for i, a in enumerate(street.get("attachments") or []):
         if a.get("isImage") and a.get("path"):
@@ -259,7 +280,7 @@ def write_pdf(store, street, path):
             wpx = 640 if img.width() >= img.height() else int(640 * img.width() / img.height() * 0.9)
             images.append((i, a["name"], max(200, wpx)))
 
-    doc.setHtml(build_html(store, street, parcel_img, parcel_info, images, plan_img, path_img))
+    doc.setHtml(build_html(store, street, parcel_img, parcel_info, images, plan_img, path_img, profile_imgs))
 
     writer = QPdfWriter(path)
     writer.setTitle(f"تقرير دراسة شارع — {street.get('name', '')}")
@@ -293,6 +314,10 @@ def export_report(store, street, out_dir, with_excel=True):
     if s.get("parcel") and os.path.exists(s["parcel"]["path"]):
         ext = os.path.splitext(s["parcel"]["name"])[1].lower()
         shutil.copy2(s["parcel"]["path"], _unique(os.path.join(folder, f"{name} - مخطط القطعة{ext}")))
+    if s.get("contours"):
+        cp = store.attachment_path(s["contours"])
+        if os.path.exists(cp):
+            shutil.copy2(cp, _unique(os.path.join(folder, f"{name} - الكنتور.dxf")))
     if s.get("sitePlan") and os.path.exists(s["sitePlan"]["path"]):
         ext = os.path.splitext(s["sitePlan"]["name"])[1].lower()
         shutil.copy2(s["sitePlan"]["path"], _unique(os.path.join(folder, f"{name} - مخطط الموقع{ext}")))

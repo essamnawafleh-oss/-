@@ -291,6 +291,7 @@ class Store:
         used = {a.get("file") for s in self.streets for a in s.get("attachments") or []}
         used |= {s["parcel"].get("file") for s in self.streets if s.get("parcel")}
         used |= {s["sitePlan"].get("file") for s in self.streets if s.get("sitePlan")}
+        used |= {s["contours"].get("file") for s in self.streets if s.get("contours")}
         for fn in os.listdir(self.attach_dir):
             if fn not in used:
                 try:
