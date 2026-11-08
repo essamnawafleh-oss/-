@@ -38,7 +38,19 @@ jobs:
           if (-not (Test-Path "$src\tesseract.exe")) { throw "tesseract not found at $src" }
           New-Item -ItemType Directory -Force vendor | Out-Null
           Copy-Item $src vendor\tesseract -Recurse
-          Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata/raw/main/ara.traineddata" -OutFile vendor\tesseract\tessdata\ara.traineddata
+          # تنزيل بيانات العربية مع إعادة المحاولة ومصدر احتياطي (تعطّل الخادم مؤقتاً لا يوقف البناء)
+          $urls = @("https://github.com/tesseract-ocr/tessdata/raw/main/ara.traineddata",
+                    "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata@main/ara.traineddata")
+          $ok = $false
+          foreach ($attempt in 1..4) {
+            foreach ($u in $urls) {
+              try { Invoke-WebRequest $u -OutFile vendor\tesseract\tessdata\ara.traineddata -TimeoutSec 120; $ok = $true; break }
+              catch { Write-Host "download failed ($u): $_" }
+            }
+            if ($ok) { break }
+            Start-Sleep -Seconds (10 * $attempt)
+          }
+          if (-not $ok) { throw "could not download ara.traineddata" }
           Get-ChildItem vendor\tesseract\tessdata\*.traineddata | Where-Object { $_.Name -notin @('ara.traineddata','eng.traineddata','osd.traineddata') } | Remove-Item
           Remove-Item -Recurse -Force vendor\tesseract\doc -ErrorAction SilentlyContinue
           & vendor\tesseract\tesseract.exe --list-langs
