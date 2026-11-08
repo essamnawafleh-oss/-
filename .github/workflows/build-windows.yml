@@ -25,8 +25,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           # بناء مُشغّل PyInstaller من المصدر بدل النسخة الجاهزة العامة التي تشتبه بها برامج الحماية
-          $env:PYINSTALLER_COMPILE_BOOTLOADER = "1"
-          pip install --no-binary pyinstaller --no-cache-dir "pyinstaller==6.22.3"
+          # (الطريقة الموثقة: ترجمة bootloader بأداة waf ثم تثبيت الحزمة من المصدر)
+          git clone --depth 1 --branch v6.22.3 https://github.com/pyinstaller/pyinstaller.git pyi-src
+          Push-Location pyi-src\bootloader
+          python ./waf distclean all
+          if ($LASTEXITCODE -ne 0) { throw "bootloader build failed" }
+          Pop-Location
+          pip install ./pyi-src
+          Get-ChildItem pyi-src\PyInstaller\bootloader\Windows-64bit-intel | Format-Table Name, Length, LastWriteTime
 
       - name: Version
         shell: pwsh

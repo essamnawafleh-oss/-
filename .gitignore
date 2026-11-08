@@ -5,3 +5,4 @@ dist/
 installer_output/
 .venv/
 vendor/
+pyi-src/
