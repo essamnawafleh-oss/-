@@ -217,65 +217,6 @@ def write_path_dxf(path, name, out_file, store_items=None):
         if gg.get("points"):
             wr.label(ln, [gg["points"][0]], f"{ln} — {len(gg['points'])} عدد")
 
-    # الصرف الصحي: القطع حسب حالتها ودخلات الخدمات المقترحة
-    sew = path.get("sewer")
-    if sew:
-        status_layers = {"served": ("قطع مخدومة بالصرف", (3, "Continuous", 35)),
-                         "deepen": ("قطع تحتاج تعميق خط الصرف", (40, "Continuous", 35)),
-                         "lane": ("قطع تحتاج دخلة خدمات", (12, "Continuous", 50)),
-                         "no_outlet": ("قطع بلا مصرف قريب", (200, "Continuous", 50))}
-        lane_layer = wr._layer("دخلة خدمات", (6, "DASHED", 50))
-        for lot in sew.get("lots") or []:
-            if lot["status"] not in status_layers:
-                continue
-            name_l, style = status_layers[lot["status"]]
-            ln = wr._layer(name_l, style)
-            wr.poly(ln, lot["poly"], close=True)
-            cx = sum(q[0] for q in lot["poly"]) / len(lot["poly"])
-            cy = sum(q[1] for q in lot["poly"]) / len(lot["poly"])
-            wr.label(ln, [(cx, cy)], f"{lot['num']} — {name_l}")
-            lane = lot.get("lane")
-            if lane:
-                wr.poly(lane_layer, lane["path"], width=lane["width"])
-                wr.label(lane_layer, lane["path"], f"دخلة خدمات {lane['width']:g} م — {lane['length']:.1f} م")
-
-    # تجمع الأمطار والأودية المقترحة
-    dr = path.get("drainage")
-    if dr:
-        l_sag = wr._layer("نقاط تجمع الأمطار", (5, "Continuous", 50))
-        l_lane = wr._layer("دخلات تصريف الأمطار", (130, "DASHED", 50))
-        l_wadi = wr._layer("أودية مقترحة", (150, "Continuous", 70))
-        for n, sg in enumerate(dr.get("sags") or [], 1):
-            msp.add_circle((sg["x"], sg["y"]), 1.5, dxfattribs={"layer": l_sag})
-            wr.label(l_sag, [(sg["x"], sg["y"])], f"تجمع أمطار {n} — منسوب {sg['z']:.2f} — Q {sg['q']:.3f} م³/ث")
-            if len(sg.get("path") or []) > 1:
-                wr.poly(l_lane, sg["path"])
-                wr.label(l_lane, sg["path"], f"دخلة تصريف إلى {sg['outlet']} — {sg['lane_len']:.0f} م")
-        for wd in dr.get("wadis") or []:
-            c = wd["channel"]
-            wr.poly(l_wadi, wd["path"], width=c["width"])
-            wr.label(l_wadi, wd["path"], f"وادٍ مقترح {c['width']:g}×{c['depth']:g} م — Q {wd['q']:.2f} م³/ث")
-
-    # الإفراز: القطع والشوارع الداخلية
-    sd = path.get("subdivision")
-    if sd:
-        l_ok = wr._layer("قطع مفروزة", (3, "Continuous", 35))
-        l_bad = wr._layer("قطع مفروزة مخالفة", (12, "Continuous", 50))
-        l_int = wr._layer("شوارع داخلية", (30, "Continuous", 30))
-        rw = (sd.get("params") or {}).get("road_width", 8)
-        for P in sd.get("roads") or []:
-            wr.poly(l_int, P, width=rw)
-            wr.label(l_int, P, f"شارع داخلي {rw:g} م")
-        for lot in sd.get("lots") or []:
-            ln = l_ok if not lot["reasons"] else l_bad
-            wr.poly(ln, lot["poly"], close=True)
-            cx = sum(q[0] for q in lot["poly"]) / len(lot["poly"])
-            cy = sum(q[1] for q in lot["poly"]) / len(lot["poly"])
-            txt = f"{lot['n']} — {lot['area']:.0f} م² — واجهة {lot['frontage']:.1f} م"
-            if lot["reasons"]:
-                txt += " — " + "، ".join(lot["reasons"])
-            wr.label(ln, [(cx, cy)], txt, 1.0)
-
     anchor = (path.get("parcelPts") or pts or [[0, 0]])[0]
     note = msp.add_mtext(f"المواطن: {name}\\Pالقطعة: {path.get('parcel') or ''}\\P"
                          f"طول الشارع المحتسب: {path.get('bill', 0):.2f} م × {w:g} م",

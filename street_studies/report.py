@@ -49,8 +49,7 @@ def _row(label, value):
     return _tr(f'<td class="k">{_esc(label)}</td>', f"<td>{value}</td>")
 
 
-def build_html(store, street, parcel_img=False, parcel_info=None, images=(), plan_img=False, path_img=False,
-               profile_imgs=0):
+def build_html(store, street, parcel_img=False, parcel_info=None, images=(), plan_img=False, path_img=False):
     s = street
     L, W = s.get("length") or 0, s.get("width") or 0
     total = store.street_cost(s)
@@ -143,55 +142,6 @@ def build_html(store, street, parcel_img=False, parcel_info=None, images=(), pla
         if path_img:
             path_html += '<p class="c"><img src="img://path" width="640"></p>'
         path_html += f'<table width="100%">{rows_m}</table>'
-        sew = pth.get("sewer")
-        if sew:
-            from .sewer_view import HEADERS, lot_rows
-            path_html += "<h2>الصرف الصحي ودخلات الخدمات</h2>"
-            par = sew.get("params") or {}
-            path_html += (f'<p class="muted">عمق قاع خط الشارع {par.get("sewer_depth", 0):g} م · أقصى عمق '
-                          f'{par.get("max_depth", 0):g} م · أقل ميل للوصلة {par.get("conn_slope", 0) * 100:g}% · '
-                          f'عمق بداية الوصلة {par.get("start_depth", 0):g} م</p>')
-            path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in HEADERS])
-                          + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in row]) for row in lot_rows(sew)) + "</table>")
-        sd = pth.get("subdivision")
-        if sd:
-            from .subdivision_view import HEADERS as SD_HEADERS, internal_lines, lot_rows as sd_rows
-            par = sd.get("params") or {}
-            path_html += "<h2>الإفراز</h2>"
-            path_html += (f'<p class="muted">{"اقتراح تلقائي" if sd.get("mode") == "auto" else "فحص قطع مرسومة"} · '
-                          f'أقل مساحة {par.get("min_area", 0):g} م² · أقل واجهة {par.get("min_frontage", 0):g} م · '
-                          f'{len(sd["lots"])} قطعة، مطابقة {sd.get("ok", 0)}'
-                          + (f' · شوارع داخلية {sd.get("roads_area", 0):,.0f} م²' if sd.get("roads") else "") + "</p>")
-            for line_ in internal_lines(sd):
-                path_html += f'<p class="muted">{_esc(line_)}</p>'
-            path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in SD_HEADERS])
-                          + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in r]) for r in sd_rows(sd)) + "</table>")
-        dr = pth.get("drainage")
-        if dr:
-            from .drainage_view import SAG_HEADERS, WADI_HEADERS, sag_rows, wadi_rows
-            par = dr.get("params") or {}
-            path_html += "<h2>تجمع مياه الأمطار والأودية</h2>"
-            path_html += (f'<p class="muted">C = {par.get("runoff_c", 0):g} · شدة المطر {par.get("intensity", 0):g} مم/ساعة · '
-                          f'حد المساحة للوادي {par.get("stream_ha", 0):g} هكتار · n = {par.get("manning_n", 0):g}</p>')
-            if dr.get("sags"):
-                path_html += ('<table width="100%">' + _tr(*[f"<th>{h}</th>" for h in SAG_HEADERS])
-                              + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in r]) for r in sag_rows(dr)) + "</table>")
-            if dr.get("wadis"):
-                path_html += ('<p class="muted">الأودية المقترحة</p><table width="100%">'
-                              + _tr(*[f"<th>{h}</th>" for h in WADI_HEADERS])
-                              + "".join(_tr(*[f"<td>{_esc(v)}</td>" for v in r]) for r in wadi_rows(dr)) + "</table>")
-        prof = pth.get("profile")
-        if prof:
-            from .profile_view import summary_lines
-            path_html += "<h2>البروفايل الطولي للشارع</h2>"
-            for n, d in enumerate(prof.get("roads") or []):
-                if n < profile_imgs:
-                    path_html += f'<p class="c"><img src="img://prof{n}" width="660"></p>'
-                if d.get("alignment_impossible"):
-                    path_html += (f'<p class="muted">⚠ الخط {n + 1}: فرق المنسوب يحتاج طولاً لا يقل عن '
-                                  f'{d["min_length_needed"]:g} م لتحقيق حد الميل — يلزم تعديل المسار.</p>')
-                path_html += '<table width="100%">' + "".join(
-                    _tr(f'<td>{_esc(x)}</td>') for x in summary_lines(d)) + "</table>"
 
     parcel = ""
     if s.get("parcel"):
@@ -296,14 +246,6 @@ def write_pdf(store, street, path):
         except Exception:  # noqa: BLE001
             pass
 
-    profile_imgs = 0
-    prof = (street.get("path") or {}).get("profile")
-    if prof:
-        from .profile_view import render_image
-        for n, d in enumerate(prof.get("roads") or []):
-            doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl(f"img://prof{n}"), render_image(d))
-            profile_imgs += 1
-
     images = []
     for i, a in enumerate(street.get("attachments") or []):
         if a.get("isImage") and a.get("path"):
@@ -317,7 +259,7 @@ def write_pdf(store, street, path):
             wpx = 640 if img.width() >= img.height() else int(640 * img.width() / img.height() * 0.9)
             images.append((i, a["name"], max(200, wpx)))
 
-    doc.setHtml(build_html(store, street, parcel_img, parcel_info, images, plan_img, path_img, profile_imgs))
+    doc.setHtml(build_html(store, street, parcel_img, parcel_info, images, plan_img, path_img))
 
     writer = QPdfWriter(path)
     writer.setTitle(f"تقرير دراسة شارع — {street.get('name', '')}")
@@ -351,10 +293,6 @@ def export_report(store, street, out_dir, with_excel=True):
     if s.get("parcel") and os.path.exists(s["parcel"]["path"]):
         ext = os.path.splitext(s["parcel"]["name"])[1].lower()
         shutil.copy2(s["parcel"]["path"], _unique(os.path.join(folder, f"{name} - مخطط القطعة{ext}")))
-    if s.get("contours"):
-        cp = store.attachment_path(s["contours"])
-        if os.path.exists(cp):
-            shutil.copy2(cp, _unique(os.path.join(folder, f"{name} - الكنتور.dxf")))
     if s.get("sitePlan") and os.path.exists(s["sitePlan"]["path"]):
         ext = os.path.splitext(s["sitePlan"]["name"])[1].lower()
         shutil.copy2(s["sitePlan"]["path"], _unique(os.path.join(folder, f"{name} - مخطط الموقع{ext}")))
